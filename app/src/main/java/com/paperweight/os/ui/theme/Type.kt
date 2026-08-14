@@ -1,6 +1,7 @@
 package com.paperweight.os.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -12,6 +13,7 @@ import com.paperweight.os.R
 
 // Manrope and Space Grotesk are variable fonts (single file, wght axis) —
 // each weight below is the same file with a different variation setting.
+@OptIn(ExperimentalTextApi::class)
 val ManropeFamily = FontFamily(
     Font(R.font.manrope, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
     Font(R.font.manrope, FontWeight.Medium, variationSettings = FontVariation.Settings(FontVariation.weight(500))),
@@ -19,6 +21,7 @@ val ManropeFamily = FontFamily(
     Font(R.font.manrope, FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700))),
 )
 
+@OptIn(ExperimentalTextApi::class)
 val SpaceGroteskFamily = FontFamily(
     Font(R.font.space_grotesk, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
     Font(R.font.space_grotesk, FontWeight.Medium, variationSettings = FontVariation.Settings(FontVariation.weight(500))),

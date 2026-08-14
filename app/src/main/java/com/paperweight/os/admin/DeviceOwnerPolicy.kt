@@ -1,5 +1,6 @@
 package com.paperweight.os.admin
 
+import android.Manifest
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -34,6 +35,12 @@ object DeviceOwnerPolicy {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             devicePolicyManager.setKeyguardDisabled(adminComponent, true)
+            devicePolicyManager.setPermissionGrantState(
+                adminComponent,
+                context.packageName,
+                Manifest.permission.CAMERA,
+                DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED,
+            )
         }
     }
 }
