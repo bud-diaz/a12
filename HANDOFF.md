@@ -15,49 +15,55 @@ repo and `paperweightv1`.
   the literal source of truth for what each screen does and which endpoints
   it calls. Not a mockup, not a guess — read the real files when in doubt.
 
-## ⚠️ Critical: this session's code has NOT been compiled or run
+## ✅ Latest validation update
 
-This is the single most important thing in this handoff. The 7 screens
-added this session (Schedule, Vault, Station, Audience, Analytics,
-Earnings, Settings — ~30 new Kotlin files) were written and manually
-reviewed, but **`./gradlew` could not be run at all** in this session's
-environment: its network policy blocks `dl.google.com`, which is where the
-Android Gradle Plugin and every AndroidX/Compose library live. Maven
-Central resolved fine; Google's Maven repo returned a hard `403 policy
-denial` on every attempt (confirmed via the proxy's own status endpoint,
-not a transient failure). `compileDebugKotlin` never got past plugin
-resolution.
+The previous handoff's main blocker has been cleared: the all-9-screen build
+now compiles and installs in this environment against a real connected Galaxy
+A12.
 
-Concretely, that means:
-- Overview and Broadcast (prior session) were compiled, installed, and
-  smoke-tested on a real device — genuinely verified.
-- Schedule/Vault/Station/Audience/Analytics/Earnings/Settings (this
-  session) are **only** manually reviewed against the established pattern
-  and the real `paperweightv1` source — never compiled. Two real mistakes
-  were caught this way during review (a blocking `errorBody().string()`
-  call on the main dispatcher in `ScheduleViewModel`, fixed to run on
-  `Dispatchers.IO`; and a corrupted import line in `VaultScreen.kt` from a
-  careless `replace_all`, fixed). There is no guarantee more mistakes like
-  that don't remain — a compiler would have caught both instantly, and
-  wasn't available to catch anything else.
-- **The very first thing the next session must do is run the full
-  validation baseline below in an environment that can actually reach
-  `dl.google.com`** (a normal dev machine, or a remote environment
-  configured with a less restrictive network policy) and fix whatever
-  compile errors surface. Do not assume any of the 7 new screens work
-  until that's happened.
-- A second, independent read-only review pass (fresh context, no memory of
-  writing the code) checked all 34 new/modified files specifically for
-  compile-breaking issues — icon name typos, malformed imports, generic
-  type-inference pitfalls in `DropdownField` call sites, Retrofit
-  annotation/import correctness, and ViewModel↔Screen method signature
-  matches. It found nothing beyond the two bugs already caught and fixed
-  during the original write-up. That raises confidence but is **not a
-  substitute for actually compiling** — a reviewer reading Kotlin is not a
-  Kotlin compiler, and neither review pass could catch things a real build
-  would (missing Gradle deps, resource references, R8/lint issues, etc).
+Validated on latest `main` (`f4135db`, merged PR #2):
 
-## Status: what's built (compiled+device-verified vs. reviewed-only)
+```text
+./gradlew :app:compileDebugKotlin
+./gradlew assembleDebug
+./gradlew :app:testDebugUnitTest      # NO-SOURCE, but task succeeds
+./gradlew :app:connectedDebugAndroidTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Observed results:
+
+```text
+compileDebugKotlin: BUILD SUCCESSFUL
+assembleDebug: BUILD SUCCESSFUL, app-debug.apk 88M
+connectedDebugAndroidTest: BUILD SUCCESSFUL
+adb install -r: Success
+```
+
+Device state after install/HOME recovery:
+
+```text
+device: R58RB5AYA7L
+model: SM-A125U
+api: 30
+package: com.paperweight.os
+versionName: 1.0
+lastUpdateTime: 2026-08-14 12:31:32
+foreground: com.paperweight.os/.pairing.PairingActivity
+lock-task: LOCKED after HOME
+camera permission: granted=true, POLICY_FIXED
+crash buffer: no com.paperweight.os FATAL EXCEPTION / AndroidRuntime entries
+```
+
+Only compiler warnings were deprecation notices for `Icons.Outlined.TrendingUp`
+and `Icons.Outlined.Send` recommending the AutoMirrored variants. They are not
+validation blockers.
+
+Important boundary: this is build/install/kiosk validation, **not** live
+backend validation. The A12 is still at QR pairing, so the 9 dashboard screens
+have not yet been exercised against a paired Paperweight station.
+
+## Status: what's built and what has been validated
 
 - **Gradle project scaffold** — builds and installs on a real Galaxy A12.
   Latest verified on connected `SM-A125U` / API 30 with `adb install -r`.
@@ -96,7 +102,7 @@ Concretely, that means:
   rotation mode, restart, queue poll/removal. Live mic streaming
   (`AudioRecord` → `/api/dashboard/live/chunk`) is still an open stretch
   item, not attempted this session (explicitly out of scope for this pass).
-- **Schedule (M4, reviewed-only)** — `ui/dashboard/schedule/`: blocks +
+- **Schedule (M4, compiled; live-backend unverified)** — `ui/dashboard/schedule/`: blocks +
   smart playlists CRUD (inline forms, no modal system), "next 24h" preview
   panel, "enable scheduled mode" action. Real endpoints are `/api/schedule*`,
   not `/api/dashboard/schedule*` — don't assume the `dashboard/` prefix
@@ -104,19 +110,19 @@ Concretely, that means:
   (403 possible) — surfaced via the server's real error message, not a
   generic failure. No polling — Studio's three schedule queries have no
   `refetchInterval`, unlike Overview/Broadcast.
-- **Analytics (M4, reviewed-only)** — `ui/dashboard/analytics/`: reuses the
+- **Analytics (M4, compiled; live-backend unverified)** — `ui/dashboard/analytics/`: reuses the
   pre-existing `DashboardAnalyticsApi` in full (no new Retrofit interface).
   Only the `live` stats poll (10s, matching Studio's own interval — not the
   5s used elsewhere). Canvas bar chart for 30-day history, same technique as
   Overview's `WeekHistoryChart`. All-time "most played" is computed
   client-side by joining `library/structure` with `analytics/playcounts`,
   same as Studio does.
-- **Earnings (M4, reviewed-only)** — `ui/dashboard/earnings/`: reuses the
+- **Earnings (M4, compiled; live-backend unverified)** — `ui/dashboard/earnings/`: reuses the
   pre-existing `DashboardEarningsApi` in full. Revenue hero + mix bar, tip
   presets editor (mirrors `TipConfigModal.tsx`: 3 dollar presets + a
   custom-amount toggle), top earners. "Payment settings" button points at
   the separately-built Settings screen (no shared modal system to reuse).
-- **Audience (M4, reviewed-only)** — `ui/dashboard/audience/`: today's
+- **Audience (M4, compiled; live-backend unverified)** — `ui/dashboard/audience/`: today's
   insights, audience-memory search/segments/people (live-updates via
   `LaunchedEffect`, no debounce — matches Studio's own per-keystroke
   refetch), marketing contacts, automations (pause/rule enable+mode/sweep/
@@ -132,7 +138,7 @@ Concretely, that means:
   the field you're *not* touching would be read as "clear this field," not
   "leave it alone." Worth remembering if more partial-update endpoints show
   up in Vault/Station-style screens later.
-- **Station (M4, reviewed-only)** — `ui/dashboard/station/`: public URL,
+- **Station (M4, compiled; live-backend unverified)** — `ui/dashboard/station/`: public URL,
   Cloudflare tunnel (token/zone/hostname, connect/disconnect, 5s tunnel-
   status poll only when a tunnel is actually configured/managed), directory
   searchability (with the health recheck Studio triggers on failure),
@@ -144,7 +150,7 @@ Concretely, that means:
   `occurred_at` timestamp strings (presence = reached), not booleans —
   confirmed from the server route, not assumed from the JSDoc (which was
   stale/wrong on this point).
-- **Vault (M4, reviewed-only, largest screen)** — `ui/dashboard/vault/`:
+- **Vault (M4, compiled; live-backend unverified, largest screen)** — `ui/dashboard/vault/`:
   track + collection pricing (inline forms replacing `TrackPriceModal`/
   `ProjectPriceModal`), collection track add/remove/reorder (up/down arrows,
   computed reordered id list like Studio's `moveTrack`), artwork upload via
@@ -156,7 +162,7 @@ Concretely, that means:
   Studio modals with no Android equivalent screen — both stubbed as a
   notice rather than invented. Collection delete uses an inline "Delete
   this collection? Yes/No" confirm instead of `window.confirm`.
-- **Settings (M4, reviewed-only)** — `ui/dashboard/settings/`: workspace
+- **Settings (M4, compiled; live-backend unverified)** — `ui/dashboard/settings/`: workspace
   motion toggle (genuinely local/ephemeral, matches Studio's own
   unpersisted `useState`), notifications (webhook + go-live toggle), RSS
   feed (enable + scope), track glow color (hex text field + swatch preview
@@ -171,55 +177,48 @@ Concretely, that means:
 
 ## Validation status and remaining gaps
 
-Local Android validation **could not be run this session** — see the
-critical network-policy note above. The baseline that was verified in an
-**earlier** session (with a working local SDK) was:
+The full local Android validation baseline now passes against all 9 screens:
 
 ```text
-./gradlew :app:compileDebugKotlin
-./gradlew assembleDebug
-./gradlew :app:testDebugUnitTest      # NO-SOURCE, but task succeeds
+./gradlew :app:compileDebugKotlin     # BUILD SUCCESSFUL
+./gradlew assembleDebug               # BUILD SUCCESSFUL, APK 88M
+./gradlew :app:testDebugUnitTest      # BUILD SUCCESSFUL / NO-SOURCE
 ./gradlew :app:connectedDebugAndroidTest
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-That baseline covered Overview and Broadcast only. **Re-run the full
-baseline against all 9 screens before trusting any of this session's
-code.**
-
-Latest physical-device facts observed (from the earlier session):
+Latest physical-device facts observed:
 
 ```text
 device: R58RB5AYA7L
 model: SM-A125U
 api: 30
 package: com.paperweight.os
-kiosk: pairing.PairingActivity, lock-task returns to LOCKED after HOME
+versionName: 1.0
+lastUpdateTime: 2026-08-14 12:31:32
+foreground: pairing.PairingActivity
+kiosk: lock-task returns to LOCKED after HOME
+camera permission: granted=true, POLICY_FIXED
+crash buffer: no com.paperweight.os FATAL EXCEPTION / AndroidRuntime entries
 ```
 
-Still not exercised against a real paired backend — this predates this
-session and remains true: the QR redeem flow, and every screen's data
-rendering/mutations, need `npm run dev` (or a deployed Paperweight station)
-on the same Wi-Fi as the A12, with a browser logged into Studio showing the
-pairing QR. Do not claim backend end-to-end success for *any* screen,
-including the previously-verified Overview/Broadcast, until that pairing
-has actually happened and been exercised.
+Still not exercised against a real paired backend: the QR redeem flow and every
+screen's real data rendering/mutations need `npm run dev` (or a deployed
+Paperweight station) on the same Wi-Fi as the A12, with a browser logged into
+Studio showing the pairing QR. Do not claim backend end-to-end success for any
+screen until that pairing has happened and the screens hit real endpoints.
 
-Known caution points (compounding the ones already listed above per
-screen):
+Known caution points:
 1. The QR redeem flow itself has still not been live-paired in any session.
 2. `LibraryStructure`/`LibraryTrack` DTOs were pulled from
-   `paperweightv1/src/api/library.js`'s `formatItem()` and still need a
-   live JSON round-trip.
-3. `BroadcastQueueItem` intentionally accepts both `id` and legacy
-   `mediaId` because `views/Broadcast.tsx` typed `mediaId`, while the
-   current Express endpoint returns `id`.
-4. Every new DTO this session was written by reading the real
-   `paperweightv1` server route handlers (not just `api.js`'s JSDoc, which
-   was caught being stale/wrong at least once — Station's `setupProgress`
-   milestones) — but none of it has been round-tripped against a live
-   server. Treat field names as "best evidence from source reading," not
-   "confirmed."
+   `paperweightv1/src/api/library.js`'s `formatItem()` and still need a live
+   JSON round-trip.
+3. `BroadcastQueueItem` intentionally accepts both `id` and legacy `mediaId`
+   because `views/Broadcast.tsx` typed `mediaId`, while the current Express
+   endpoint returns `id`.
+4. Every new DTO this session was written by reading the real `paperweightv1`
+   server route handlers. Compile/build now proves the Kotlin is valid, but it
+   does not prove the DTO field shapes against a live server response.
 
 ## Key decisions made this session (don't re-litigate these without reason)
 
@@ -241,26 +240,18 @@ CLAUDE.md for the durable version):
 
 New this session:
 
-7. **This remote execution environment cannot build Android at all.**
-   `dl.google.com` is blocked by network policy (confirmed `403 policy
-   denial`, not a transient error) — the Android Gradle Plugin and every
-   AndroidX/Compose dependency live there. Maven Central alone isn't
-   enough. Flag this immediately in any future session that opens in a
-   similarly-restricted remote environment rather than assuming Gradle
-   will "just work" because it did in a prior local session.
-8. **7 screens were implemented without any compiler in the loop** — user
-   was informed of this mid-session and explicitly chose to continue
-   anyway ("Continue without building") rather than stop after one screen
-   or wait for a network-policy fix. This was the right call for making
-   progress, but it means the honest status is "reviewed, not verified,"
-   and the next session must not upgrade that to "verified" without
-   actually compiling.
-9. **`DropdownField` promoted to a shared component** the moment a second
+7. **The original no-compiler blocker is resolved.** The follow-up validation
+   session ran `compileDebugKotlin`, `assembleDebug`, unit-test task,
+   connected-test task, and `adb install -r` successfully against latest
+   `main` with all 9 screens present. Keep future status language at
+   "compiled/build-installed/kiosk-smoked, live-backend unverified" until
+   QR pairing + endpoint smoke tests are done.
+8. **`DropdownField` promoted to a shared component** the moment a second
    screen (Audience) needed the same label+tap-menu select Schedule had
    built privately — follow this same "wait for the second occurrence,
    then promote" discipline for any other pattern that repeats across the
    remaining Milestone 5 work.
-10. **Desktop-platform-gated endpoints (403) get their error message
+9. **Desktop-platform-gated endpoints (403) get their error message
     surfaced, not swallowed into a generic failure** — first needed for
     Schedule's block/playlist mutations, then reused for Audience's
     radio-host/external-import and Vault/Station's various mutations. If
@@ -269,7 +260,7 @@ New this session:
     (currently duplicated per-ViewModel, matching the established
     one-file-per-screen self-containment convention — see CLAUDE.md
     "Working conventions").
-11. **No client-side modal system exists**, so every screen that opens a
+10. **No client-side modal system exists**, so every screen that opens a
     Studio "modal" (`TrackPriceModal`, `ProjectPriceModal`, docs viewer,
     uninstall-confirm, etc.) got ported as an inline expandable
     `PanelCard` instead — consistent across Schedule/Vault/Settings. Two
@@ -281,9 +272,10 @@ New this session:
 
 ## What's left: Milestone 5 (hardening)
 
-With all 9 screens now built, this is next:
-- **Actually compile and run this session's 7 new screens** — see the
-  critical note at the top. Nothing below matters until this happens.
+With all 9 screens now built and the full baseline compiling/installing, this is next:
+- **Live-backend validation**: pair the A12 to a dev or deployed Paperweight
+  station and smoke every screen's load path plus at least one safe mutation
+  per screen where possible.
 - **Session-loss handling**: a 401 from any call should route back to
   `PairingActivity` (clear `SessionStore`, `startActivity` + `finish`), not
   crash or silently retry. Confirmed via full-tree search this session:
@@ -301,9 +293,8 @@ With all 9 screens now built, this is next:
   shot load" screens against Overview/Broadcast/Station's "some fields
   poll" screens for any drift, now that both patterns are established.
 - **Re-confirm "no retry queue, no local cache fallback, no crash"** holds
-  on all 9 screens, not just Overview — this was the design intent
-  throughout this session's new code but was never verified by actually
-  running it.
+  on all 9 screens against real network responses, not just compile-time UI
+  construction.
 - **Broadcast's live-mic stretch** (`AudioRecord` → `/api/dashboard/live/
   chunk`) — still open, not attempted this or the previous session.
 
@@ -335,13 +326,13 @@ app/src/main/java/com/paperweight/os/
     └── dashboard/
         ├── overview/                // done (M4), compiled+device-verified — reference pattern
         ├── broadcast/               // done for rotation/queue, compiled+device-verified; live mic is stretch
-        ├── schedule/                // done (M4), reviewed-only this session
-        ├── analytics/                // done (M4), reviewed-only this session
-        ├── earnings/                 // done (M4), reviewed-only this session
-        ├── audience/                 // done (M4), reviewed-only this session
-        ├── station/                  // done (M4), reviewed-only this session
-        ├── vault/                    // done (M4), reviewed-only this session, largest
-        └── settings/                 // done (M4), reviewed-only this session
+        ├── schedule/                // done (M4), compiles; live backend unverified
+        ├── analytics/                // done (M4), compiles; live backend unverified
+        ├── earnings/                 // done (M4), compiles; live backend unverified
+        ├── audience/                 // done (M4), compiles; live backend unverified
+        ├── station/                  // done (M4), compiles; live backend unverified
+        ├── vault/                    // done (M4), compiles; live backend unverified, largest
+        └── settings/                 // done (M4), compiles; live backend unverified
 ```
 
 ## Verification
