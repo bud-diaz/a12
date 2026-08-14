@@ -13,6 +13,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import com.paperweight.os.network.SessionStore
+import com.paperweight.os.pairing.PairingActivity
 import com.paperweight.os.provisioning.SetupActivity
 import com.paperweight.os.ui.theme.PaperweightOSTheme
 
@@ -31,9 +33,15 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        if (!SessionStore(applicationContext).isPaired) {
+            startActivity(Intent(this, PairingActivity::class.java))
+            finish()
+            return
+        }
+
         setContent {
             PaperweightOSTheme {
-                MissionControlPlaceholder()
+                DashboardPlaceholder()
             }
         }
     }
@@ -51,11 +59,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Stands in for the nav shell + 9 dashboard screens (Milestones 3-4).
 @Composable
-private fun MissionControlPlaceholder() {
+private fun DashboardPlaceholder() {
     Box(modifier = Modifier.fillMaxSize()) {
         Text(
-            text = stringResource(R.string.mission_control_placeholder),
+            text = stringResource(R.string.dashboard_placeholder),
             modifier = Modifier.align(Alignment.Center)
         )
     }

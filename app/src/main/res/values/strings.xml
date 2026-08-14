@@ -3,5 +3,10 @@
     <string name="app_name">Paperweight OS</string>
     <string name="device_admin_disable_warning">Disabling device admin removes Paperweight OS from lock-task mode. Use adb to manage this device instead.</string>
     <string name="setup_pending_message">Awaiting device owner provisioning. Run the setup script over adb, then reboot.</string>
-    <string name="mission_control_placeholder">Mission Control</string>
+    <string name="dashboard_placeholder">Dashboard</string>
+
+    <string name="pairing_camera_permission_required">Camera access is needed to scan the pairing code from Studio.</string>
+    <string name="pairing_scan_instructions">Open Studio on a device that\'s already signed in, choose \"Pair a new device,\" and scan the QR code shown there.</string>
+    <string name="pairing_connecting">Connecting to your station…</string>
+    <string name="pairing_retry">Try again</string>
 </resources>
