@@ -1,14 +1,14 @@
 # Handoff: Paperweight OS build-out
 
-Written at the end of a session that scaffolded the project and built
-Milestones 0-3 (plus the first screen of Milestone 4) of the full build-out
-plan. This file is self-contained — a new session shouldn't need anything
-from the previous session's local state to pick this up, only this repo and
-`paperweightv1`.
+Written as the running handoff for the Paperweight OS Android build-out.
+The repo now has Milestones 0-3, Overview, and Broadcast rotation/queue
+controls implemented. This file is self-contained — a new session shouldn't
+need anything from the previous session's local state to pick this up, only
+this repo and `paperweightv1`.
 
 ## Read first
 
-- `/home/user/a12/CLAUDE.md` — project constraints and v1 scope, kept current
+- `/home/bud/a12/CLAUDE.md` — project constraints and v1 scope, kept current
   through this session (rewritten once already, see "Key decisions" below).
 - `paperweightv1`'s `studio/src/views/*.tsx` and `studio/src/lib/api.js` —
   the literal source of truth for what each screen does and which endpoints
@@ -16,11 +16,13 @@ from the previous session's local state to pick this up, only this repo and
 
 ## Status: what's built and verified
 
-- **Gradle project scaffold** — builds and installs on a real Galaxy A12
-  (confirmed by the user before this session's work started).
-- **Device Owner boilerplate** — `admin/PaperweightDeviceAdminReceiver.kt`,
-  provisioning flow, `provisioning/setup.sh`. Unchanged this session, still
-  working.
+- **Gradle project scaffold** — builds and installs on a real Galaxy A12.
+  Latest verified on connected `SM-A125U` / API 30 with `adb install -r`.
+- **Device Owner / kiosk mode** — `admin/PaperweightDeviceAdminReceiver.kt`,
+  provisioning flow, `provisioning/setup.sh`, reusable `DeviceOwnerPolicy`,
+  boot/package-replaced receiver, lock-task retry logic, and policy-granted
+  camera permission for QR pairing. Connected A12 currently reaches
+  `pairing.PairingActivity`; lock-task returned to `LOCKED` after HOME.
 - **Design system (M0)** — real Studio tokens and fonts, not the abandoned
   mockup's. Colors computed from `studio/src/index.css`'s HSL values;
   Manrope/Space Grotesk/DM Mono fonts fetched from Google Fonts into
@@ -31,9 +33,9 @@ from the previous session's local state to pick this up, only this repo and
   `EncryptedSharedPreferences` via `network/SessionStore.kt`.
 - **Core networking (M2, partial)** — `network/ApiClient.kt` (Retrofit +
   OkHttp with a `DynamicBaseUrlInterceptor` since the base URL is only known
-  after pairing), `SessionCookieJar.kt`. DTOs/Retrofit interfaces exist so
-  far only for what Overview needs: `StreamApi`, `LibraryApi`,
-  `DashboardAnalyticsApi`, `DashboardEarningsApi`, `AuthApi`.
+  after pairing), `SessionCookieJar.kt`. DTOs/Retrofit interfaces exist for
+  Overview and Broadcast: `AuthApi`, `StreamApi`, `LibraryApi`,
+  `DashboardAnalyticsApi`, `DashboardEarningsApi`, and `DashboardBroadcastApi`.
 - **Navigation shell (M3)** — `ui/nav/DashboardApp.kt`: hamburger-triggered
   `ModalNavigationDrawer` + `NavHost` with all 9 destinations
   (`DashboardDestination.kt`). Overview and Broadcast are real; the other 7
@@ -56,29 +58,45 @@ from the previous session's local state to pick this up, only this repo and
   streaming (`dashboard/live/start|chunk|stop` with `AudioRecord`) is still the
   stretch item from the original handoff.
 
-**Not yet tested on a real device or against a real backend** — this
-sandbox has no camera and no network path to a live `paperweightv1`
-instance, so none of the pairing flow, the network layer, or Overview's
-data rendering has been exercised end-to-end. The user was about to do that
-testing when this session ended. Check with them for results before
-assuming any of it works as designed — especially:
-1. Gradle dependency resolution for the libraries added this session
-   (CameraX, ML Kit barcode-scanning, Retrofit, OkHttp,
-   kotlinx.serialization + its Retrofit converter, androidx.security-crypto,
-   material-icons-extended) — this sandbox can't reach `dl.google.com`, so
-   this has never actually been resolved, only reasoned about.
-2. A handful of Material icon names used without the ability to verify them
-   against the real `material-icons-extended` artifact:
-   `Icons.Outlined.{Dashboard,Radio,Schedule,Lock,Public,People,BarChart,
-   Payments,Settings,Headphones,LibraryMusic,AccountBalanceWallet}`. If any
-   don't resolve, it's a quick swap for a same-purpose icon that does.
-3. The QR redeem flow itself (parsing `pairUrl`, POSTing
-   `/api/auth/dashboard/device/redeem`, capturing `Set-Cookie`) — zero way
-   to exercise this from a sandbox with no camera.
-4. `LibraryStructure`/`LibraryTrack` DTOs in
-   `network/models/LibraryModels.kt` — the field shape was pulled directly
-   from `paperweightv1/src/api/library.js`'s `formatItem()`, which is
-   accurate, but the DTOs haven't been round-tripped against real JSON.
+## Validation status and remaining live-backend gap
+
+Local Android validation has been run successfully in this environment:
+
+```text
+./gradlew :app:compileDebugKotlin
+./gradlew assembleDebug
+./gradlew :app:testDebugUnitTest      # NO-SOURCE, but task succeeds
+./gradlew :app:connectedDebugAndroidTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Latest physical-device facts observed:
+
+```text
+device: R58RB5AYA7L
+model: SM-A125U
+api: 30
+package: com.paperweight.os
+kiosk: pairing.PairingActivity, lock-task returns to LOCKED after HOME
+```
+
+Still not fully exercised against a real paired backend: the QR redeem flow,
+Overview data rendering, and Broadcast actions need `npm run dev` (or a deployed
+Paperweight station) on the same Wi-Fi as the A12, with a browser logged into
+Studio showing the pairing QR. Do not claim backend end-to-end success until the
+A12 is actually paired and the screens hit real station endpoints.
+
+Known caution points:
+1. The QR redeem flow itself (parsing `pairUrl`, POSTing
+   `/api/auth/dashboard/device/redeem`, capturing `Set-Cookie`) has not been
+   live-paired yet in this handoff.
+2. `LibraryStructure`/`LibraryTrack` DTOs in
+   `network/models/LibraryModels.kt` were pulled from
+   `paperweightv1/src/api/library.js`'s `formatItem()` and still need a live
+   JSON round-trip.
+3. `BroadcastQueueItem` intentionally accepts both `id` and legacy `mediaId`
+   because `views/Broadcast.tsx` typed `mediaId`, while the current Express
+   endpoint returns `id`.
 
 ## Key decisions made this session (don't re-litigate these without reason)
 
@@ -118,7 +136,7 @@ durable version, but the reasoning is worth carrying forward:
    Android equivalent and no reason to invent one — just omit it, it isn't a
    CLAUDE.md scope question, the bridge simply doesn't exist here.
 
-## What's left: Milestones 4 (screens 2-9) and 5 (hardening)
+## What's left: Milestone 4 (remaining screens + Broadcast live stretch) and Milestone 5 (hardening)
 
 Each screen follows the same pattern already established by Overview:
 1. Read the real screen source in `paperweightv1/studio/src/views/*.tsx`
@@ -140,7 +158,7 @@ the same table from the original build plan:
 
 | Screen | Source | Key endpoints (see `api.js` for exact shapes) | Notes |
 |---|---|---|---|
-| **Broadcast** | `views/Broadcast.tsx` | `stream/status`, `dashboard/broadcast/queue` (5s poll), `dashboard/broadcast/mode`\|`restart`, `dashboard/live/status`\|`start`\|`chunk`\|`stop` | "Go live" (mic) needs `AudioRecord` → PCM chunk POST to `/api/dashboard/live/chunk` — highest-complexity item in the whole remaining scope. Treat as this screen's stretch goal; mode switch/restart/queue management are standard CRUD and should ship regardless. |
+| **Broadcast** | `views/Broadcast.tsx` | `stream/status`, `dashboard/broadcast/queue` (5s poll), `dashboard/broadcast/mode`\|`restart`, `dashboard/live/status`\|`start`\|`chunk`\|`stop` | Rotation mode, restart, queue poll, and queue removal are implemented in native Compose. Remaining stretch: "Go live" mic streaming via `AudioRecord` → PCM chunk POST to `/api/dashboard/live/chunk` plus status/start/stop controls. |
 | **Schedule** | `views/ScheduleView.tsx` | `dashboard/schedule` CRUD, `schedule/smart-playlists` CRUD, `schedule/preview` | Two list+form sections (blocks, smart playlists) plus a 24h preview panel. Straightforward CRUD forms. |
 | **Vault** | `views/Vault.tsx` | `dashboard/vault/pricing`, `.../highlight`, `dashboard/media`, `dashboard/accounts`, `dashboard/tokens` (+assignments), `dashboard/media/{id}/artwork` (multipart) | Largest screen (353 lines source). Pricing forms, collection management, access tokens. Multipart artwork upload needs `okhttp3.MultipartBody`. |
 | **Station** | `views/Station.tsx` | `dashboard/station`, `.../health`, `.../cloudflare/*`, `.../telemetry/*`, `dashboard/setup-progress` | Public URL / tunnel / telemetry config; several independent mutation groups, mostly simple forms + status chips. |
@@ -175,7 +193,7 @@ app/src/main/java/com/paperweight/os/
 ├── network/                        // M2, partial — grows per-screen from here
 │   ├── ApiClient.kt                // wire new *Api interfaces in here
 │   ├── AuthApi.kt / StreamApi.kt / LibraryApi.kt
-│   ├── DashboardAnalyticsApi.kt / DashboardEarningsApi.kt
+│   ├── DashboardAnalyticsApi.kt / DashboardEarningsApi.kt / DashboardBroadcastApi.kt
 │   ├── SessionStore.kt / SessionCookieJar.kt / DynamicBaseUrlInterceptor.kt
 │   └── models/                     // DTOs, grouped like studio's api.js
 └── ui/
@@ -197,10 +215,22 @@ app/src/main/java/com/paperweight/os/
 
 ## Verification
 
-Same as the original plan: `./gradlew assembleDebug` needs an environment
-with real network access (this sandbox can't reach `dl.google.com`) —
-Android Studio or CI. Unit-test repository/ViewModel logic against
-`MockWebServer` using the JSON shapes documented in `api.js`. Real
-end-to-end testing requires `npm run dev` in `paperweightv1` on the same
-Wi-Fi as the A12, paired via a QR from a browser logged into that dev
-Studio instance.
+Current Android validation baseline:
+
+```bash
+export JAVA_HOME="$HOME/.local/jdks/jdk-17"
+export ANDROID_HOME="$HOME/Android/Sdk"
+export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+./gradlew :app:compileDebugKotlin
+./gradlew assembleDebug
+./gradlew :app:testDebugUnitTest
+./gradlew :app:connectedDebugAndroidTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+End-to-end station validation still requires `npm run dev` in `paperweightv1`
+on the same Wi-Fi as the A12, then pairing via Studio's "Pair a new device" QR.
+After pairing, smoke Overview and Broadcast against the real backend before
+claiming network/runtime correctness.
