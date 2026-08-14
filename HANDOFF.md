@@ -47,50 +47,75 @@ read the plan first.
 
 ## Latest validation update
 
-**Phase 0 (Groundwork) is code-complete but NOT build-verified.** This
-session's environment (a cloud/remote sandbox, not the local machine the
-previous pairing-era validation ran on) has no Android SDK installed and
-its outbound proxy blocks `dl.google.com` (`CONNECT tunnel failed, response
-403`), which hosts the Android Gradle Plugin and Android SDK artifacts —
-confirmed via `curl -sS -o /dev/null -w "%{http_code}" https://dl.google.com/`
-returning `000`/403 through the proxy. `./gradlew :app:compileDebugKotlin`
-fails immediately at plugin resolution, before any of this session's Kotlin
-is even parsed:
+**Phase 0 (Groundwork) is build-verified on this machine.** Current session
+confirmed Google Maven reachability (`curl -sS -o /dev/null -w "%{http_code}" https://dl.google.com/`
+returned `302`), installed/used Temurin JDK 17 at `/home/bud/.local/jdks/jdk-17`,
+and used the existing Android SDK at `/home/bud/Android/Sdk`.
 
+Real build results:
+
+```bash
+export JAVA_HOME=/home/bud/.local/jdks/jdk-17
+export ANDROID_HOME=/home/bud/Android/Sdk
+export ANDROID_SDK_ROOT=/home/bud/Android/Sdk
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+./gradlew :app:compileDebugKotlin   # BUILD SUCCESSFUL in 40s
+./gradlew assembleDebug             # BUILD SUCCESSFUL in 2m 3s
 ```
-Plugin [id: 'com.android.application', version: '8.6.0', apply: false] was not found...
-Searched in: Google, MavenRepo, Gradle Central Plugin Repository
+
+`compileDebugKotlin` produced only existing deprecation warnings for
+`Icons.Outlined.TrendingUp` and `Icons.Outlined.Send`; no Kotlin compile
+errors. `assembleDebug` produced `app/build/outputs/apk/debug/app-debug.apk`
+(size observed: 62,767,865 bytes) and only warned that
+`libandroidx.graphics.path.so` could not be stripped, which Gradle packaged as-is.
+
+On-device smoke result against the connected Galaxy A12:
+
+```bash
+adb shell getprop ro.product.model      # SM-A125U
+adb shell getprop ro.build.version.release # 11
+adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell uiautomator dump /sdcard/window.xml
 ```
 
-This is an environment limitation, not a code issue — do not waste time
-re-debugging plugin resolution here; it needs a session with real Google
-Maven access (a local machine, per the "Verification" section's documented
-`JAVA_HOME`/`ANDROID_HOME` setup, or a cloud environment with a different
-network policy).
+The device is already Device Owner for
+`com.paperweight.os/.admin.PaperweightDeviceAdminReceiver`. With no SD card
+present, `MainActivity` launched successfully and the UI hierarchy contained
+the expected Phase 0 gate text:
 
-In lieu of a real compile, this session did a thorough manual review:
-- Broad `grep` across the entire `com.paperweight.os` package tree for any
-  remaining reference to every deleted symbol (`PairingActivity`,
-  `SessionStore`, `SessionCookieJar`, `DynamicBaseUrlInterceptor`,
-  `network.ApiClient`, `network.AuthApi`, every deleted `*Api.kt`,
-  `retrofit2.*`, `com.jakewharton.retrofit`, `okhttp3.logging`) — zero
-  matches.
-- For each of the 9 dashboard screens, `grep`'d the `Screen.kt` file for
-  every `viewModel.<method>`/`viewModel::<method>` reference and confirmed
-  the corresponding stubbed `ViewModel.kt` still declares that exact method
-  signature (Kotlin type-checks the `content = { data -> ... }` lambda
-  inside `ScreenStateScaffold` at compile time even though it never
-  executes while `state` is `ScreenState.Error`, so a missing method there
-  would still break the build).
-- Confirmed every `network.models.*` type referenced by a stub `ViewModel`'s
-  surviving method signatures (`VaultProject`, `Poll`, `ExternalSearchItem`,
-  `TipConfig`, `ScheduleBlockRequest`, `SmartPlaylistRequest`,
-  `UpdateCollectionRequest`, `VaultPricingRequest`) is still declared in the
-  kept `network/models/*.kt` files.
+> SD card required
+>
+> Paperweight OS stores its media vault and backups on a removable SD card,
+> not internal storage. Insert a card of at least 2GB to continue — this
+> screen clears itself automatically once one is detected.
 
-**This must be re-verified with a real build the moment a session has
-Android SDK + Google Maven access** — treat Phase 0 as "should compile,
-unconfirmed" until then, not "done."
+A tail of `adb logcat` after launch showed no `FATAL EXCEPTION` for
+`com.paperweight.os`.
+
+Manual grep checks were also repeated after the build:
+- Broad search across `app/src/main/java/com/paperweight/os` for deleted
+  pairing/transport symbols (`PairingActivity`, `PairingViewModel`,
+  `PairingScreen`, `QrCodeAnalyzer`, `SessionStore`, `SessionCookieJar`,
+  `DynamicBaseUrlInterceptor`, `network.ApiClient`, `network.AuthApi`,
+  `retrofit2.*`, `com.jakewharton.retrofit`, `okhttp3.logging`) — zero matches.
+- Search for deleted API interface names (`Dashboard*Api`, `StreamApi`,
+  `LibraryApi`, `AuthApi`) found only one harmless comment in
+  `network/models/AudienceModels.kt` referencing `DashboardScheduleApi`.
+
+**Phase 1 (Local data layer) is code-complete and verified on the connected
+A12.** Build, install, no-card gate, card formatting/mounting, valid-card
+dashboard entry, and Phase 1 data-layer instrumentation tests have all been
+exercised. The card used here is a marketed 2GB card that formats to ~1.8GiB
+usable / 2,002,780,160 raw bytes, so the app threshold was corrected from
+binary 2GiB to decimal 2GB (`2_000_000_000L`) to match the written requirement.
+
+Phase 1 added Room/KSP, a fixed DB filename (`paperweight-os.db`), the v1 local
+entities/DAOs, `AppPreferences`, repositories, `ServiceLocator`, an exported
+Room schema, and a real instrumented test suite. `Phase1DataLayerInstrumentedTest`
+was first run red against missing data-layer classes, then green after
+implementation. Final result: 5 tests, 0 failures, 0 errors on `SM-A125U - 11`.
 
 ## Status: what's built (Phase 0)
 
@@ -145,6 +170,42 @@ unconfirmed" until then, not "done."
   `state` is `ScreenState.Content`, so the existing built UI never renders
   while stubbed, but the code still compiles against it.
 
+## Status: what's built (Phase 1)
+
+- **Room/KSP added**: Gradle now applies KSP, adds Room runtime/ktx/compiler,
+  WorkManager, NanoHTTPD, zxing, and androidTest dependencies. WorkManager,
+  NanoHTTPD, and zxing are present because the approved Phase 1 plan's Gradle
+  change list brings them in with the local data layer baseline, even though
+  their feature use lands in later phases.
+- **Fixed DB filename**: `AppDatabase.DATABASE_NAME = "paperweight-os.db"`.
+  Do not rename casually; Phase 3 `RestoreManager` depends on this known path.
+- **New `data/db/entity/` package** with the v1 local tables:
+  `VaultTrackEntity`, `VaultCollectionEntity`,
+  `VaultCollectionTrackCrossRef`, `VaultHighlightEntity`,
+  `ScheduleBlockEntity`, `SmartPlaylistEntity`, `ListenerTokenEntity`,
+  `AnalyticsEventEntity`, `AnalyticsDailyRollupEntity`,
+  `ListenerSessionEntity`, and `StationProfileEntity`.
+- **New DAO package**: `VaultDao`, `ScheduleDao`, `TokenDao`, `AnalyticsDao`,
+  and `StationDao`, using `Flow` observers plus Room `@Upsert` writes.
+- **New `AppDatabase`** under `data/db/`: Room database version 1,
+  `fallbackToDestructiveMigration()` for v1 only, and exported schema at
+  `app/schemas/com.paperweight.os.data.db.AppDatabase/1.json`.
+- **New `data/prefs/AppPreferences.kt`**: SharedPreferences-backed non-secret
+  config flows for station name, server port, backup retention count, and
+  backup interval. This is intentionally non-secret only; frp secrets later
+  belong behind `androidx.security.crypto` and do not round-trip through
+  backups.
+- **New repositories**: `VaultRepository`, `ScheduleRepository`,
+  `StationRepository`, `TokenRepository`, `AnalyticsRepository`, and a thin
+  `BroadcastRepository` composition holder for later broadcast phases.
+- **New `di/ServiceLocator.kt`**: composition root for database, preferences,
+  and repositories, replacing the old remote-client composition point for
+  future rewiring.
+- **New instrumented tests**:
+  `app/src/androidTest/java/com/paperweight/os/data/Phase1DataLayerInstrumentedTest.kt`
+  verifies fixed DB name, Vault/Schedule/Station repository persistence, and
+  AppPreferences round-trips against an in-memory Room database on the real A12.
+
 ## Key decisions made this session (don't re-litigate without reason)
 
 1. **`network/models/*.kt` DTOs are deliberately kept for now**, despite
@@ -169,10 +230,10 @@ unconfirmed" until then, not "done."
    would silently show fake/empty data as if it were real, which is worse
    than an honest "not wired yet" message with a working "Try again" retry
    button (already provided generically by `ScreenStateScaffold`).
-3. **Manual code review substitutes for a real build in this session** —
-   see "Latest validation update." Do not report Phase 0 as "verified" to
-   the user or in any future HANDOFF entry until a real `compileDebugKotlin`
-   has actually run successfully.
+3. **Phase 0 now has real build + card-path verification** — see "Latest
+   validation update." `compileDebugKotlin`, `assembleDebug`, APK install on
+   the real A12, no-SD-card gate, SD-card public formatting/mounting, and
+   valid-card dashboard entry all passed.
 4. **Manifest/permission additions are added per-phase, not front-loaded.**
    `RECORD_AUDIO`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`,
    `POST_NOTIFICATIONS`, `ACCESS_WIFI_STATE`, `WAKE_LOCK`, and the
@@ -185,22 +246,25 @@ unconfirmed" until then, not "done."
    `provisioning/setup.sh` are untouched and still valid — this pivot only
    changes what happens *after* Device Owner is claimed, not the claiming
    flow itself.
+6. **2GB means decimal 2GB, not binary 2GiB.** The real card used for
+   validation is marketed as 2GB and reports 2,002,780,160 bytes raw / ~1.8GiB
+   usable after Android formats it. The SD-card gate now uses
+   `2_000_000_000L`, so a legitimate 2GB card satisfies the requirement.
+7. **Phase 1 data layer is intentionally not wired into dashboard screens yet.**
+   The Phase 0 ViewModel stubs remain in place; screen-by-screen rewiring starts
+   in later phases as each domain gets implemented. Phase 1's deliverable is the
+   local persistence/composition foundation and tests, not visible UI data.
 
 ## What's left
 
-Phases 1–12 per the plan file. Immediate next steps in order:
-1. **Re-verify Phase 0 with a real build** the moment Android SDK + Google
-   Maven access is available (see "Verification" below) — this is the
-   single highest-priority item, ahead of starting Phase 1.
-2. **Phase 1 — Local data layer**: Room DB (add KSP + Room deps), entities/
-   DAOs per the plan's package layout, `AppPreferences`, repositories,
-   `ServiceLocator`. Use a fixed, known DB filename (Phase 3's
-   `RestoreManager` depends on this).
-3. **Phase 2 — Vault ingestion**: SAF picker (one-time SD-card tree grant),
+Phases 2–12 per the plan file. Immediate next steps in order:
+1. **Phase 2 — Vault ingestion**: SAF picker (one-time SD-card tree grant),
    metadata extraction, `VaultFileStore` writing into `Paperweight/vault/`
-   on the card.
-4. **Phase 3 — Backup & recovery**: see plan decision #12.
-5. Phases 4–12 as detailed in the plan file.
+   on the card, and Vault screen's "Add to vault" path.
+2. **Phase 3 — Backup & recovery**: see plan decision #12.
+3. **Phase 4 — Broadcast engine core**: decode/encode/segment/playlist
+   pipeline, `BroadcastEngine`, `BroadcastService`, Overview/Broadcast rewiring.
+4. Phases 5–12 as detailed in the plan file.
 
 Also still open, carried in the plan itself: the frp registration contract
 (Phase 9) needs to be read directly from `paperweightv1` in a local session
@@ -219,6 +283,13 @@ app/src/main/java/com/paperweight/os/
 ├── storage/                        // NEW (Phase 0)
 │   ├── SdCardDetector.kt
 │   └── SdCardMountState.kt
+├── data/                           // NEW (Phase 1)
+│   ├── db/AppDatabase.kt            // Room DB, fixed name paperweight-os.db
+│   ├── db/entity/                   // Vault, schedule, token, analytics, station tables
+│   ├── dao/                         // VaultDao, ScheduleDao, TokenDao, AnalyticsDao, StationDao
+│   ├── prefs/AppPreferences.kt      // non-secret device/server/backup config
+│   └── repository/                  // local repository facades
+├── di/ServiceLocator.kt             // NEW (Phase 1), local composition root
 ├── network/models/                 // KEPT (see Key decisions #1), transport layer deleted
 │   ├── AudienceModels.kt / BroadcastModels.kt / DashboardAnalyticsModels.kt
 │   ├── DashboardEarningsModels.kt / LibraryModels.kt / ScheduleModels.kt
@@ -238,34 +309,137 @@ app/src/main/java/com/paperweight/os/
 
 ## Verification
 
-**This session could not run a real build** — see "Latest validation
-update" for why. The next session with real tooling access should run:
+Phase 0 build verification now passes in this environment using:
 
 ```bash
-export JAVA_HOME="$HOME/.local/jdks/jdk-17"
-export ANDROID_HOME="$HOME/Android/Sdk"
-export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+export JAVA_HOME=/home/bud/.local/jdks/jdk-17
+export ANDROID_HOME=/home/bud/Android/Sdk
+export ANDROID_SDK_ROOT=/home/bud/Android/Sdk
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 
-# First, confirm dl.google.com is actually reachable in that environment —
-# this session's proxy blocked it (403); don't waste time debugging
-# "broken" Kotlin before ruling out an environment/network problem again.
-curl -sS -o /dev/null -w "%{http_code}\n" https://dl.google.com/
-
-./gradlew :app:compileDebugKotlin
-./gradlew assembleDebug
+curl -sS -o /dev/null -w "%{http_code}\n" https://dl.google.com/ # 302
+./gradlew :app:compileDebugKotlin # BUILD SUCCESSFUL
+./gradlew assembleDebug           # BUILD SUCCESSFUL
 ```
 
-If `compileDebugKotlin` fails on anything other than a plugin/dependency
-resolution error, that's a real bug in this session's Phase 0 changes —
-fix it before starting Phase 1. If it succeeds, update this section (and
-the "Latest validation update" section above it) with the real result
-before moving on.
+The assembled APK installed successfully on the connected real Galaxy A12
+(`SM-A125U`, Android 11), which is already Device Owner for this app:
 
-Once it compiles: install on a real Galaxy A12
-(`adb install -r app/build/outputs/apk/debug/app-debug.apk`), boot with no
-SD card inserted and confirm the "SD card required" screen appears, then
-insert a 2GB+ card and confirm it clears automatically into the dashboard
-(which will show every screen's "not wired to the on-device backend yet"
-error state with a working "Try again" button — that's the expected Phase 0
-end state, not a bug).
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell uiautomator dump /sdcard/window.xml
+```
+
+With no SD card present, the dumped UI hierarchy showed the expected blocking
+"SD card required" screen, and post-launch logcat did not show a
+`com.paperweight.os` fatal exception.
+
+Additional no-card validation after Bud physically removed the SD card
+(2026-08-14 14:47 CDT):
+
+```bash
+adb shell 'sm list-volumes all; df -h /storage/* 2>/dev/null || true'
+# private mounted null
+# emulated;0 mounted null
+# /storage only showed emulated storage; no removable SD volume was mounted.
+
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell dumpsys activity activities | grep -E 'ResumedActivity|mLockTaskModeState|mLockTaskAuth'
+# MainActivity resumed, mLockTaskAuth=LOCK_TASK_AUTH_WHITELISTED, mLockTaskModeState=LOCKED
+
+adb shell uiautomator dump /sdcard/window.xml
+# Visible text included "SD card required" and "Insert a card of at least 2GB"
+```
+
+Post-test logcat still showed no `FATAL EXCEPTION` for `com.paperweight.os`.
+
+Card-reinsert validation attempt after Bud reinserted the SD card
+(2026-08-14 14:52 CDT):
+
+```bash
+adb shell 'sm list-volumes all; sm list-disks; df -h /storage/* 2>/dev/null || true'
+# private mounted null
+# emulated;0 mounted null
+# disk:179,96
+# /storage still only showed emulated storage; no removable public volume mounted.
+
+adb shell 'ls -la /dev/block | grep mmcblk1'
+# mmcblk1, mmcblk1p1, and mmcblk1p2 block devices existed, so hardware/card
+# insertion was visible below Android's storage layer, but vold/StorageManager
+# did not expose a mounted removable volume.
+```
+
+Bud approved wiping/repartitioning the SD card as public removable storage.
+After:
+
+```bash
+adb shell sm partition disk:179,96 public
+adb shell 'sm list-volumes all; df -h /storage/* 2>/dev/null || true'
+# public:179,97 mounted ED4F-17F7
+# /dev/fuse 1.8G 864K 1.8G 1% /storage/ED4F-17F7
+```
+
+This proved the physical card and Android storage path are usable. The card is
+a marketed 2GB card, but Android reports 2,002,780,160 raw bytes / ~1.8GiB
+usable after formatting. Because the requirement says "2GB+" in normal
+storage-card terms, `SdCardDetector.MIN_CAPACITY_BYTES` was corrected from
+binary 2GiB (`2L * 1024 * 1024 * 1024`) to decimal 2GB (`2_000_000_000L`).
+After rebuilding and reinstalling:
+
+```bash
+./gradlew :app:compileDebugKotlin assembleDebug # BUILD SUCCESSFUL
+adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell uiautomator dump /sdcard/window.xml
+# Visible text included:
+# Overview isn't wired to the on-device backend yet — coming in a later build phase.
+# Try again
+# Open navigation menu
+# Overview
+# and did NOT include "SD card required".
+```
+
+Final Phase 0 validation state: build passes, APK installs, no-card gate works,
+physical SD card can be formatted/mounted as public removable storage, and the
+valid-card path clears into the expected stubbed dashboard error state.
+
+Phase 1 validation:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.data.Phase1DataLayerInstrumentedTest
+# Starting 5 tests on SM-A125U - 11
+# Finished 5 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+```
+
+Test report:
+`app/build/outputs/androidTest-results/connected/debug/TEST-SM-A125U - 11-_app-.xml`
+reported `tests="5" failures="0" errors="0" skipped="0"` for:
+- `vaultRepositoryPersistsTracksAndCollections`
+- `appDatabaseUsesFixedNameForBackupRestore`
+- `scheduleRepositoryPersistsBlocksAndSmartPlaylists`
+- `stationRepositoryPersistsLocalStationProfile`
+- `appPreferencesRoundTripNonSecretDeviceConfig`
+
+Final build/install/smoke after Phase 1:
+
+```bash
+./gradlew :app:compileDebugKotlin :app:testDebugUnitTest assembleDebug
+# BUILD SUCCESSFUL (`testDebugUnitTest` is NO-SOURCE; tests are instrumented)
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Success
+adb shell input keyevent KEYCODE_HOME
+adb shell uiautomator dump /sdcard/window.xml
+# Visible text included:
+# Overview isn't wired to the on-device backend yet — coming in a later build phase.
+# Try again
+# Open navigation menu
+# Overview
+# and did NOT include "SD card required".
+```
+
+`dumpsys activity` after the smoke showed `mLockTaskModeState=LOCKED`, and a
+post-smoke logcat tail did not show a `FATAL EXCEPTION` for `com.paperweight.os`.
+Phase 1 can proceed to Phase 2.

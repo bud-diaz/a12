@@ -16,7 +16,10 @@ data class SdCardInfo(val path: File, val totalBytes: Long, val availableBytes: 
 // them (vault/backup storage goes through a SAF tree grant instead, added in
 // a later phase).
 object SdCardDetector {
-    const val MIN_CAPACITY_BYTES: Long = 2L * 1024 * 1024 * 1024
+    // Requirement is 2GB+ in decimal storage-card terms. A marketed 2GB card
+    // reports ~2,002,780,160 bytes after formatting, which is valid even though
+    // it is below 2 GiB (2,147,483,648 bytes).
+    const val MIN_CAPACITY_BYTES: Long = 2_000_000_000L
 
     fun findRemovableCard(context: Context): SdCardInfo? {
         val dirs = ContextCompat.getExternalFilesDirs(context, null)
