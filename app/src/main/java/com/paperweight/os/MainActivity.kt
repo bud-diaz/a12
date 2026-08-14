@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import com.paperweight.os.admin.DeviceOwnerPolicy
 import com.paperweight.os.network.SessionStore
 import com.paperweight.os.pairing.PairingActivity
 import com.paperweight.os.provisioning.SetupActivity
@@ -27,6 +28,8 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        DeviceOwnerPolicy.apply(this)
+
         if (!SessionStore(applicationContext).isPaired) {
             startActivity(Intent(this, PairingActivity::class.java))
             finish()
@@ -42,13 +45,31 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (devicePolicyManager.isDeviceOwnerApp(packageName) && !isInLockTaskMode()) {
+        window.decorView.post { enterLockTaskWhenForeground() }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enterLockTaskWhenForeground()
+    }
+
+    private fun enterLockTaskWhenForeground() {
+        if (!devicePolicyManager.isDeviceOwnerApp(packageName) || isInLockTaskMode()) return
+        if (!hasWindowFocus()) return
+
+        try {
             startLockTask()
+        } catch (_: IllegalArgumentException) {
+            window.decorView.postDelayed({ enterLockTaskWhenForeground() }, LOCK_TASK_RETRY_DELAY_MS)
         }
     }
 
     private fun isInLockTaskMode(): Boolean {
         val activityManager = getSystemService(ActivityManager::class.java)
         return activityManager.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
+    }
+
+    private companion object {
+        const val LOCK_TASK_RETRY_DELAY_MS = 500L
     }
 }
