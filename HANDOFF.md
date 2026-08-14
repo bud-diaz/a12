@@ -46,6 +46,16 @@ Concretely, that means:
   configured with a less restrictive network policy) and fix whatever
   compile errors surface. Do not assume any of the 7 new screens work
   until that's happened.
+- A second, independent read-only review pass (fresh context, no memory of
+  writing the code) checked all 34 new/modified files specifically for
+  compile-breaking issues — icon name typos, malformed imports, generic
+  type-inference pitfalls in `DropdownField` call sites, Retrofit
+  annotation/import correctness, and ViewModel↔Screen method signature
+  matches. It found nothing beyond the two bugs already caught and fixed
+  during the original write-up. That raises confidence but is **not a
+  substitute for actually compiling** — a reviewer reading Kotlin is not a
+  Kotlin compiler, and neither review pass could catch things a real build
+  would (missing Gradle deps, resource references, R8/lint issues, etc).
 
 ## Status: what's built (compiled+device-verified vs. reviewed-only)
 
