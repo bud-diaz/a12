@@ -38,12 +38,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.paperweight.os.data.db.entity.VaultTrackEntity
 import com.paperweight.os.network.models.LibraryTrack
 import com.paperweight.os.network.models.TokenAssignment
 import com.paperweight.os.network.models.UpdateCollectionRequest
@@ -57,6 +59,7 @@ import com.paperweight.os.ui.components.PanelCard
 import com.paperweight.os.ui.components.ScreenStateScaffold
 import com.paperweight.os.ui.components.ViewHeader
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 private val PAYMENT_TYPES = listOf("one_time" to "One-time", "recurring" to "Recurring")
 private val RECURRING_INTERVALS = listOf("monthly" to "Monthly", "annually" to "Annually")
@@ -65,10 +68,42 @@ private val TOKEN_TIERS = listOf("subscriber" to "Subscriber", "pro" to "Pro", "
 @Composable
 fun VaultScreen(viewModel: VaultViewModel = viewModel()) {
     val state by viewModel.state.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+
+    // "Add to vault": needs a one-time SAF tree grant over the SD card
+    // (plan decision #10) before it can pick source files. If the grant is
+    // already held, skip straight to the file picker.
+    var pendingTreeGrant by rememberSaveable { mutableStateOf(false) }
+    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) viewModel.ingestTracks(uris)
+    }
+    val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+        if (treeUri != null) {
+            viewModel.persistVaultTreeGrant(treeUri)
+            if (pendingTreeGrant) {
+                pendingTreeGrant = false
+                filePickerLauncher.launch(arrayOf("audio/*"))
+            }
+        } else {
+            pendingTreeGrant = false
+            viewModel.notify("SD card folder access is required to add to the vault.")
+        }
+    }
+    val onAddToVault: () -> Unit = {
+        coroutineScope.launch {
+            if (viewModel.hasVaultTreeAccess()) {
+                filePickerLauncher.launch(arrayOf("audio/*"))
+            } else {
+                pendingTreeGrant = true
+                treeLauncher.launch(null)
+            }
+        }
+    }
 
     ScreenStateScaffold(state = state, onRetry = viewModel::load) { data ->
         var editingTrackId by rememberSaveable { mutableStateOf<Int?>(null) }
         var editingProjectId by rememberSaveable { mutableStateOf<Int?>(null) }
+        var editingLocalTrackId by rememberSaveable { mutableStateOf<String?>(null) }
 
         LazyColumn(
             modifier = Modifier.fillMaxWidth(),
@@ -92,8 +127,45 @@ fun VaultScreen(viewModel: VaultViewModel = viewModel()) {
                 HeroPanel(
                     trackCount = data.trackPrices.size,
                     projectCount = data.projects.size,
-                    onAddToVault = { viewModel.notify("Adding new vault media isn't ported to this kiosk yet — use Studio on desktop.") },
+                    onAddToVault = onAddToVault,
                 )
+            }
+            item {
+                Text(
+                    text = "Your vault",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (data.localTracks.isEmpty()) {
+                item {
+                    Text(
+                        text = "Nothing ingested yet — tap \"Add to vault\" to pick audio files from the device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                items(data.localTracks, key = { it.id }) { track ->
+                    Column {
+                        LocalVaultTrackRow(
+                            track = track,
+                            enabled = !data.actionInFlight,
+                            onEditClick = { editingLocalTrackId = if (editingLocalTrackId == track.id) null else track.id },
+                        )
+                        if (editingLocalTrackId == track.id) {
+                            LocalTrackPriceForm(
+                                track = track,
+                                enabled = !data.actionInFlight,
+                                onCancel = { editingLocalTrackId = null },
+                                onSave = { suggested, minimum, allowFree ->
+                                    viewModel.saveLocalTrackPricing(track.id, suggested, minimum, allowFree)
+                                    editingLocalTrackId = null
+                                },
+                            )
+                        }
+                    }
+                }
             }
             if (!data.hasAnything) {
                 item {
@@ -642,6 +714,61 @@ private fun TokenRow(
             }
         }
     }
+}
+
+@Composable
+private fun LocalVaultTrackRow(track: VaultTrackEntity, enabled: Boolean, onEditClick: () -> Unit) {
+    PanelCard(modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(14.dp)) {
+        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = track.title, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = "${track.artist ?: "Unknown artist"} · ${formatDurationMs(track.durationMs)} · " +
+                        formatPriceCents(track.suggestedPriceCents, track.allowFree),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            OutlinedButton(onClick = onEditClick, enabled = enabled) { Text("Edit price") }
+        }
+    }
+}
+
+@Composable
+private fun LocalTrackPriceForm(track: VaultTrackEntity, enabled: Boolean, onCancel: () -> Unit, onSave: (Int, Int, Boolean) -> Unit) {
+    var suggested by rememberSaveable(track.id) { mutableStateOf(centsToDollarText(track.suggestedPriceCents)) }
+    var minimum by rememberSaveable(track.id) { mutableStateOf(centsToDollarText(track.minimumPriceCents)) }
+    var allowFree by rememberSaveable(track.id) { mutableStateOf(track.allowFree) }
+
+    PanelCard(modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Text(text = "Price “${track.title}”", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            OutlinedTextField(value = suggested, onValueChange = { suggested = it }, label = { Text("Suggested price ($)") }, placeholder = { Text("5.00") }, modifier = Modifier.weight(1f))
+            OutlinedTextField(value = minimum, onValueChange = { minimum = it }, label = { Text("Minimum price ($)") }, placeholder = { Text("1.00") }, modifier = Modifier.weight(1f))
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        ) {
+            Text(text = "Allow free / pay-what-you-want", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            Switch(checked = allowFree, onCheckedChange = { allowFree = it })
+        }
+        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
+            OutlinedButton(onClick = onCancel, modifier = Modifier.padding(end = 8.dp)) { Text("Cancel") }
+            Button(
+                onClick = { onSave(dollarsToCents(suggested), dollarsToCents(minimum), allowFree) },
+                enabled = enabled,
+            ) { Text("Save pricing") }
+        }
+    }
+}
+
+private fun formatDurationMs(durationMs: Long): String {
+    val totalSeconds = durationMs / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%d:%02d".format(minutes, seconds)
 }
 
 private fun formatPriceCents(cents: Int, allowFree: Boolean): String {

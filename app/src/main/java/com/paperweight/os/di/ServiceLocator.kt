@@ -9,12 +9,14 @@ import com.paperweight.os.data.repository.ScheduleRepository
 import com.paperweight.os.data.repository.StationRepository
 import com.paperweight.os.data.repository.TokenRepository
 import com.paperweight.os.data.repository.VaultRepository
+import com.paperweight.os.vault.VaultIngestor
 
 class ServiceLocator private constructor(context: Context) {
     private val appContext = context.applicationContext
     val database: AppDatabase by lazy { AppDatabase.getInstance(appContext) }
     val appPreferences: AppPreferences by lazy { AppPreferences.create(appContext) }
     val vaultRepository: VaultRepository by lazy { VaultRepository(database.vaultDao()) }
+    val vaultIngestor: VaultIngestor by lazy { VaultIngestor(vaultRepository, appPreferences) }
     val scheduleRepository: ScheduleRepository by lazy { ScheduleRepository(database.scheduleDao()) }
     val tokenRepository: TokenRepository by lazy { TokenRepository(database.tokenDao()) }
     val analyticsRepository: AnalyticsRepository by lazy { AnalyticsRepository(database.analyticsDao()) }

@@ -70,6 +70,7 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.nanohttpd)
     implementation(libs.zxing.core)
+    implementation(libs.androidx.documentfile)
 
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.truth)

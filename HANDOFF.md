@@ -117,6 +117,29 @@ Room schema, and a real instrumented test suite. `Phase1DataLayerInstrumentedTes
 was first run red against missing data-layer classes, then green after
 implementation. Final result: 5 tests, 0 failures, 0 errors on `SM-A125U - 11`.
 
+**Phase 2 (Vault ingestion) is code-complete but UNVERIFIED — this session had
+no Android SDK, no `adb`, and no physical device.** This session ran in a
+different sandboxed remote environment than the one that validated Phases 0–1
+(no `/home/bud` machine, no `~/Android` SDK). Confirmed unavailable:
+
+```bash
+which adb        # not found
+ls ~/Android     # No such file or directory
+./gradlew :app:compileDebugKotlin
+# FAILURE: Plugin [id: 'com.android.application', version: '8.6.0'] was not
+# found — this environment's proxy doesn't reach Google's Maven plugin repo,
+# so even a bare Kotlin compile check couldn't be run.
+```
+
+So none of Phase 2's code has been built, installed, or exercised on-device
+this session — everything below is implementation + careful manual review
+only. Treat this the same as the plan's Phase 9 frp-contract deferral: the
+next session with real Android SDK + `adb` + the physical A12 needs to run
+the full Phase 0/1-style build-and-install-and-smoke-test pass on Phase 2
+before it's trusted, **and specifically needs to check the lockTask
+allowlist item under "Key decisions" below before assuming ingestion works
+at all inside the kiosk.**
+
 ## Status: what's built (Phase 0)
 
 - **`pairing/` package deleted entirely** — `PairingActivity`,
@@ -206,6 +229,72 @@ implementation. Final result: 5 tests, 0 failures, 0 errors on `SM-A125U - 11`.
   verifies fixed DB name, Vault/Schedule/Station repository persistence, and
   AppPreferences round-trips against an in-memory Room database on the real A12.
 
+## Status: what's built (Phase 2)
+
+- **New `vault/` package**: `MetadataExtractor.kt` (wraps
+  `MediaMetadataRetriever` — title/artist/album/duration/mime, falling back
+  to the source filename when a track has no title tag), `VaultFileStore.kt`
+  (pure SAF `DocumentFile` copy into `Paperweight/vault/` on an already-
+  granted tree URI — creates the folder chain if missing, de-dupes
+  filenames), and `VaultIngestor.kt` (owns the one-time tree-grant
+  persist/re-validate logic per decision #10, and orchestrates
+  extract-then-copy-then-`VaultRepository.upsertTrack` as one `ingest()`
+  call, dispatched onto `Dispatchers.IO`).
+- **`storagePath` stores the copied file's own SAF document URI** (e.g.
+  `content://com.android.externalstorage.documents/tree/.../document/...`),
+  not a human-readable relative path — that's the only identifier SAF
+  guarantees stays resolvable across app restarts for a tree-granted volume.
+  `sourceUri` still records where the file originally came from, for
+  reference only.
+- **`AppPreferences` gained `vaultTreeUri`** (nullable `Flow<String?>` +
+  setter), stored in the existing plain (non-encrypted) prefs file —
+  intentionally non-secret, it's just a permission handle over content
+  already physically on the card, not a credential.
+- **`ServiceLocator` gained `vaultIngestor`**, composed from
+  `vaultRepository` + `appPreferences`.
+- **Gradle: added `androidx.documentfile:documentfile:1.0.1`** — needed for
+  `DocumentFile`/SAF tree operations, added now because this is the first
+  phase that needs it (same "add at the phase that needs it" discipline as
+  Phase 0/1).
+- **`VaultViewModel` rewired for the first time since the pivot** (every
+  other dashboard ViewModel is still the Phase 0 stub). `state` now starts
+  at `ScreenState.Content(VaultUiState())` (not `Error`) and
+  `VaultRepository.observeTracks()` feeds `VaultUiState.localTracks` live.
+  `ingestTracks(uris)` drives the SAF-picker → `VaultIngestor.ingest()` loop
+  and reports a one-line success/failure summary via the existing
+  `actionMessage` field. `saveLocalTrackPricing()` is a real, working
+  read-modify-write against `VaultTrackEntity`'s pricing columns (those
+  columns and `VaultRepository.upsertTrack`/`getTrack` already existed from
+  Phase 1 — wiring pricing edits for locally-ingested tracks was near-zero
+  extra cost once ingestion needed a working `Content` state anyway).
+- **Every legacy pre-pivot handler on `VaultViewModel`
+  (`saveTrackPricing`/collections/highlight/artwork/tokens — the
+  `network.models` DTO-shaped surface) now calls `notify(LEGACY_NOT_WIRED)`
+  instead of silently no-op'ing.** Previously these were empty function
+  bodies; that was fine when the whole screen rendered `ScreenState.Error`
+  and none of that UI was reachable. Now that `VaultScreen` renders real
+  `Content` (for the ingestion section), the old pricing/collections/token
+  UI panels became reachable-but-dead — tapping "Create" on a token, for
+  example, would have silently done nothing. Per this file's existing
+  decision #2 philosophy ("honest not-wired message beats fake success"),
+  every one of those buttons now gives feedback instead of quietly eating
+  the tap. `trackPrices`/`projects`/`tokens` all still populate as empty
+  lists (nothing fetches them locally yet), so in practice most of that
+  legacy UI doesn't render at all today — only the always-visible "Access
+  tokens" panel's Create button was actually reachable, and it's covered by
+  this fix.
+- **`VaultScreen.kt`** gained: the "Add to vault" SAF-picker flow (tree
+  grant check → `OpenDocumentTree` if not yet granted → `OpenMultipleDocuments`
+  filtered to `audio/*`), a new always-rendered "Your vault" list section for
+  `localTracks` (`LocalVaultTrackRow` + `LocalTrackPriceForm`, reusing the
+  existing `formatPriceCents`/`centsToDollarText`/`dollarsToCents` helpers),
+  and a `formatDurationMs` helper. All pre-existing legacy composables
+  (`ProjectRow`, `TrackRow`, `TokenManagerPanel`, etc.) are untouched.
+- **No `AndroidManifest.xml` changes** — per plan decision, SAF tree/file
+  grants need no manifest permission (no `READ_MEDIA_AUDIO`, no
+  `MANAGE_EXTERNAL_STORAGE`); confirmed nothing else in Phase 2 needed a
+  manifest change either.
+
 ## Key decisions made this session (don't re-litigate without reason)
 
 1. **`network/models/*.kt` DTOs are deliberately kept for now**, despite
@@ -254,17 +343,73 @@ implementation. Final result: 5 tests, 0 failures, 0 errors on `SM-A125U - 11`.
    The Phase 0 ViewModel stubs remain in place; screen-by-screen rewiring starts
    in later phases as each domain gets implemented. Phase 1's deliverable is the
    local persistence/composition foundation and tests, not visible UI data.
+8. **RESOLVED (this session, follow-up): the lockTask blocker on the SAF/content
+   pickers is now fixed via dynamic `PackageManager` resolution instead of a
+   hardcoded package name — still unverified on real hardware.**
+   `DeviceOwnerPolicy.setLockTaskPackages` previously only allowlisted
+   `com.paperweight.os` and `com.android.settings`, which blocks
+   `ACTION_OPEN_DOCUMENT_TREE`/`ACTION_OPEN_DOCUMENT` (the "Add to vault"
+   flow) and `ACTION_GET_CONTENT` (the legacy artwork-upload flow) from
+   launching under lockTask, since the system picker resolves to a different
+   package. Rather than guess which package that is (AOSP's
+   `com.android.documentsui`? Play-Store-updated `com.google.android.documentsui`?
+   Samsung's own My Files? — varies by OEM/OS version and can change across a
+   system update), `DeviceOwnerPolicy.apply()` now queries `PackageManager`
+   at runtime for whatever actually resolves those three intents and
+   allowlists exactly that, re-computed on every `MainActivity.onCreate()`
+   (self-healing across OS updates). This required adding a `<queries>`
+   manifest declaration (`AndroidManifest.xml`) for the three intents, since
+   Android 11+ package-visibility filtering would otherwise make
+   `queryIntentActivities` return nothing for a non-privileged app.
+   **This still has not been confirmed on the physical A12** — this session
+   still has no `adb`/Android SDK (same limitation as the rest of Phase 2).
+   `DeviceOwnerPolicy` logs an `android.util.Log.w` warning if resolution
+   comes back empty, to make that debuggable on the next real-device session.
+9. **`storagePath` on `VaultTrackEntity` now stores the ingested file's own
+   SAF document URI (`content://...`), not a relative path string.** The
+   Phase 1 instrumented test's example data used a human-readable relative
+   path (`"Paperweight/vault/intro.mp3"`), but that was just test fixture
+   data, not a contract — Phase 1 didn't have an ingestion path yet to bind
+   the real shape. A `content://` document URI is the only thing SAF
+   actually guarantees stays resolvable (via `ContentResolver.openInputStream`)
+   across app restarts for a tree-granted volume, so that's what Phase 2's
+   real `VaultIngestor` writes there. Later phases (broadcast engine reading
+   vault files, Phase 3 backup) should treat `storagePath` as an opaque SAF
+   URI, not a filesystem path.
+10. **This session could not run `./gradlew` at all** — no Android SDK, no
+    `adb`, and this remote sandbox's network proxy doesn't reach Google's
+    Maven plugin repository (`com.android.application` plugin resolution
+    failed even for a bare `compileDebugKotlin` attempt). Phase 2's code is
+    implementation + manual review only, unlike every prior phase in this
+    file, which all had a real on-device build/install/smoke pass before
+    being marked done. Do not treat Phase 2 as verified until that happens.
 
 ## What's left
 
-Phases 2–12 per the plan file. Immediate next steps in order:
-1. **Phase 2 — Vault ingestion**: SAF picker (one-time SD-card tree grant),
-   metadata extraction, `VaultFileStore` writing into `Paperweight/vault/`
-   on the card, and Vault screen's "Add to vault" path.
-2. **Phase 3 — Backup & recovery**: see plan decision #12.
-3. **Phase 4 — Broadcast engine core**: decode/encode/segment/playlist
+**Phase 2 is code-complete but needs a real-device pass before it's trusted**
+(see "Latest validation update" and key decisions #8–10 above). In order,
+before starting Phase 3:
+1. Build on a machine with the Android SDK (`./gradlew :app:compileDebugKotlin
+   assembleDebug`) — this has not happened for Phase 2's code yet.
+2. Install on the physical A12 and try "Add to vault" for real. The lockTask
+   package allowlist is now computed dynamically (key decision #8) so this
+   *should* just work — confirm the picker actually opens, and if it
+   doesn't, check logcat for `DeviceOwnerPolicy`'s "No package resolved..."
+   warning and `adb shell dumpsys activity activities | grep -E
+   'mLockTaskModeState|mLockTaskAuth'` to see what's actually happening.
+3. Once the picker actually opens: grant the SD-card folder, pick a real
+   audio file, confirm it appears under "Your vault" with extracted
+   metadata, confirm the file physically lands under `Paperweight/vault/` on
+   the card (inspect via `adb shell` or a card reader, not internal
+   storage), and confirm "Edit price" round-trips through Room.
+
+Phases 3–12 per the plan file, once the above is confirmed:
+1. **Phase 3 — Backup & recovery**: see plan decision #12. Reuses the same
+   SAF tree URI Phase 2 now persists in `AppPreferences.vaultTreeUri` —
+   don't build a second tree-grant mechanism.
+2. **Phase 4 — Broadcast engine core**: decode/encode/segment/playlist
    pipeline, `BroadcastEngine`, `BroadcastService`, Overview/Broadcast rewiring.
-4. Phases 5–12 as detailed in the plan file.
+3. Phases 5–12 as detailed in the plan file.
 
 Also still open, carried in the plan itself: the frp registration contract
 (Phase 9) needs to be read directly from `paperweightv1` in a local session
@@ -283,13 +428,17 @@ app/src/main/java/com/paperweight/os/
 ├── storage/                        // NEW (Phase 0)
 │   ├── SdCardDetector.kt
 │   └── SdCardMountState.kt
-├── data/                           // NEW (Phase 1)
+├── data/                           // Phase 1, prefs extended in Phase 2
 │   ├── db/AppDatabase.kt            // Room DB, fixed name paperweight-os.db
 │   ├── db/entity/                   // Vault, schedule, token, analytics, station tables
 │   ├── dao/                         // VaultDao, ScheduleDao, TokenDao, AnalyticsDao, StationDao
-│   ├── prefs/AppPreferences.kt      // non-secret device/server/backup config
+│   ├── prefs/AppPreferences.kt      // + vaultTreeUri (Phase 2): persisted SAF tree grant
 │   └── repository/                  // local repository facades
-├── di/ServiceLocator.kt             // NEW (Phase 1), local composition root
+├── vault/                          // NEW (Phase 2)
+│   ├── MetadataExtractor.kt         // MediaMetadataRetriever wrapper
+│   ├── VaultFileStore.kt            // pure SAF copy into Paperweight/vault/
+│   └── VaultIngestor.kt             // tree-grant persist/check + ingest() orchestration
+├── di/ServiceLocator.kt             // Phase 1 composition root, + vaultIngestor (Phase 2)
 ├── network/models/                 // KEPT (see Key decisions #1), transport layer deleted
 │   ├── AudienceModels.kt / BroadcastModels.kt / DashboardAnalyticsModels.kt
 │   ├── DashboardEarningsModels.kt / LibraryModels.kt / ScheduleModels.kt
@@ -299,8 +448,9 @@ app/src/main/java/com/paperweight/os/
     ├── nav/                        // untouched
     ├── components/                 // untouched
     ├── setup/SdCardRequiredScreen.kt  // NEW (Phase 0)
-    └── dashboard/                  // all 9 screens: Screen.kt/UiState.kt untouched,
-                                     //   ViewModel.kt stubbed to ScreenState.Error
+    └── dashboard/                  // Vault/Screen.kt+ViewModel.kt+UiState.kt rewired
+                                     //   for local ingestion (Phase 2); the other 8
+                                     //   screens are still the Phase 0 Error stubs
         ├── overview/ broadcast/ schedule/ vault/ station/
         └── audience/ analytics/ earnings/ settings/
 ```
@@ -443,3 +593,30 @@ adb shell uiautomator dump /sdcard/window.xml
 `dumpsys activity` after the smoke showed `mLockTaskModeState=LOCKED`, and a
 post-smoke logcat tail did not show a `FATAL EXCEPTION` for `com.paperweight.os`.
 Phase 1 can proceed to Phase 2.
+
+Phase 2 validation: **none performed — none possible in this session's
+environment.** This session ran with no Android SDK, no `adb`, and no
+network path to Google's Maven plugin repository:
+
+```bash
+which adb                          # (nothing — command not found)
+ls ~/Android                       # No such file or directory
+./gradlew :app:compileDebugKotlin
+# FAILURE: Plugin [id: 'com.android.application', version: '8.6.0'] was not
+# found in any of the following sources: Google, MavenRepo, Gradle Central
+# Plugin Repository
+```
+
+So Phase 2's build has never actually succeeded — not even a Kotlin-only
+compile check, let alone `assembleDebug`, install, or the on-device SAF
+picker/ingestion smoke test the plan's own verification steps 3–4 call for.
+Everything under "Status: what's built (Phase 2)" and "Key decisions" #8–10
+above is implementation plus careful manual review of types/imports/API
+usage against the rest of this codebase, nothing more. The next session with
+real Android SDK + `adb` + the physical A12 must, in order: (1) run
+`./gradlew :app:compileDebugKotlin assembleDebug` and fix whatever doesn't
+compile — there has been zero compiler feedback on this code so far; (2)
+install and resolve the lockTask allowlist question (key decision #8) before
+"Add to vault" can even be attempted; (3) then run the plan's Phase 2
+verification steps (ingest a real file, confirm it lands under
+`Paperweight/vault/` on the card, confirm metadata/pricing round-trip).
