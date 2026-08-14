@@ -16,7 +16,13 @@ object DeviceOwnerPolicy {
         val adminComponent = ComponentName(context, PaperweightDeviceAdminReceiver::class.java)
         val homeActivity = ComponentName(context, MainActivity::class.java)
 
-        devicePolicyManager.setLockTaskPackages(adminComponent, arrayOf(context.packageName))
+        devicePolicyManager.setLockTaskPackages(
+            adminComponent,
+            arrayOf(
+                context.packageName,
+                SETTINGS_PACKAGE,
+            )
+        )
         devicePolicyManager.clearPackagePersistentPreferredActivities(
             adminComponent,
             context.packageName
@@ -41,4 +47,6 @@ object DeviceOwnerPolicy {
             // work here for the QR pairing flow.
         }
     }
+
+    private const val SETTINGS_PACKAGE = "com.android.settings"
 }
