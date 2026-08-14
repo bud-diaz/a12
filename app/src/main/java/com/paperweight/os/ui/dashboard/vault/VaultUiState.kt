@@ -1,5 +1,6 @@
 package com.paperweight.os.ui.dashboard.vault
 
+import com.paperweight.os.data.db.entity.VaultTrackEntity
 import com.paperweight.os.network.models.LibraryTrack
 import com.paperweight.os.network.models.TokenAssignment
 import com.paperweight.os.network.models.VaultHighlight
@@ -8,6 +9,11 @@ import com.paperweight.os.network.models.VaultToken
 import com.paperweight.os.network.models.VaultTrackPrice
 
 data class VaultUiState(
+    // Locally ingested tracks (Phase 2: SAF picker -> VaultFileStore ->
+    // Room), live from VaultRepository.observeTracks(). Everything below
+    // this field is still driven by the pre-pivot remote DTOs and stays
+    // empty/not-wired until pricing/collections/tokens get their own phase.
+    val localTracks: List<VaultTrackEntity> = emptyList(),
     val trackPrices: List<VaultTrackPrice> = emptyList(),
     val projects: List<VaultProject> = emptyList(),
     val unpricedVaultTracks: List<VaultTrackPrice> = emptyList(),
@@ -21,7 +27,7 @@ data class VaultUiState(
     val actionInFlight: Boolean = false,
 ) {
     val hasAnything: Boolean
-        get() = trackPrices.isNotEmpty() || projects.isNotEmpty() || unpricedVaultTracks.isNotEmpty()
+        get() = trackPrices.isNotEmpty() || projects.isNotEmpty() || unpricedVaultTracks.isNotEmpty() || localTracks.isNotEmpty()
 
     // Mutations refetch pricing/tokens/etc., but shouldn't clobber the
     // independently-managed token-assignments panel state.
