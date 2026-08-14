@@ -6,20 +6,29 @@ import androidx.compose.runtime.Composable
 
 private val PaperweightColorScheme = darkColorScheme(
     background = PaperweightBackground,
-    surface = PaperweightSurface,
-    primary = PaperweightAccent,
-    onBackground = PaperweightOnBackground,
-    onSurface = PaperweightOnBackground
+    surface = PaperweightBackground,
+    surfaceVariant = PaperweightCard,
+    primary = PaperweightPrimary,
+    onPrimary = PaperweightPrimaryForeground,
+    secondary = PaperweightSecondary,
+    onSecondary = PaperweightSecondaryForeground,
+    tertiary = PaperweightAccent,
+    onTertiary = PaperweightAccentForeground,
+    error = PaperweightDestructive,
+    onError = PaperweightDestructiveForeground,
+    onBackground = PaperweightForeground,
+    onSurface = PaperweightForeground,
+    onSurfaceVariant = PaperweightMutedForeground,
+    outline = PaperweightBorder,
+    outlineVariant = PaperweightCardBorder,
 )
 
-// Typography.kt (DM Serif Display / Space Mono, bundled via res/font/) is pending —
-// the font resources have not been supplied yet, so this theme falls back to
-// MaterialTheme's default type scale until they are.
 @Composable
 fun PaperweightOSTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = PaperweightColorScheme,
         shapes = PaperweightShapes,
+        typography = PaperweightTypography,
         content = content
     )
 }
