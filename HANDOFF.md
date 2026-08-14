@@ -343,28 +343,28 @@ at all inside the kiosk.**
    The Phase 0 ViewModel stubs remain in place; screen-by-screen rewiring starts
    in later phases as each domain gets implemented. Phase 1's deliverable is the
    local persistence/composition foundation and tests, not visible UI data.
-8. **UNRESOLVED, flagged rather than guessed: the SAF folder/file pickers
-   almost certainly don't work inside lockTask mode as currently configured,
-   and this was NOT fixed this session.** `DeviceOwnerPolicy.setLockTaskPackages`
-   only allowlists `com.paperweight.os` and `com.android.settings`
-   (`app/src/main/java/com/paperweight/os/admin/DeviceOwnerPolicy.kt`).
-   `ACTION_OPEN_DOCUMENT_TREE`/`ACTION_OPEN_DOCUMENT` (used by the new "Add to
-   vault" flow) resolve to a *different* package — likely AOSP's
-   `com.android.documentsui` and/or Samsung's own file-picker package on this
-   SM-A125U, package name unconfirmed — which lockTask mode will very likely
-   block from launching at all. CLAUDE.md is explicit: "Ask before touching
-   adb/USB debugging configuration, Device Owner policy scope... If a task
-   seems to require it, stop and ask first" — and this session has no `adb`
-   or physical device to determine the real resolving package, so guessing
-   and silently editing `setLockTaskPackages` was judged worse than leaving
-   it broken-but-flagged. **Next session with the physical A12: run "Add to
-   vault", see what (if anything) happens, `adb shell dumpsys activity
-   activities` or logcat to find what package the picker intent actually
-   resolves to on this device, confirm with the user this is an intended,
-   scoped addition to the lockTask allowlist (matching the existing
-   `com.android.settings` precedent), then add it to
-   `DeviceOwnerPolicy.setLockTaskPackages`.** Until that's done, "Add to
-   vault" is implemented but likely non-functional on the real locked kiosk.
+8. **RESOLVED (this session, follow-up): the lockTask blocker on the SAF/content
+   pickers is now fixed via dynamic `PackageManager` resolution instead of a
+   hardcoded package name — still unverified on real hardware.**
+   `DeviceOwnerPolicy.setLockTaskPackages` previously only allowlisted
+   `com.paperweight.os` and `com.android.settings`, which blocks
+   `ACTION_OPEN_DOCUMENT_TREE`/`ACTION_OPEN_DOCUMENT` (the "Add to vault"
+   flow) and `ACTION_GET_CONTENT` (the legacy artwork-upload flow) from
+   launching under lockTask, since the system picker resolves to a different
+   package. Rather than guess which package that is (AOSP's
+   `com.android.documentsui`? Play-Store-updated `com.google.android.documentsui`?
+   Samsung's own My Files? — varies by OEM/OS version and can change across a
+   system update), `DeviceOwnerPolicy.apply()` now queries `PackageManager`
+   at runtime for whatever actually resolves those three intents and
+   allowlists exactly that, re-computed on every `MainActivity.onCreate()`
+   (self-healing across OS updates). This required adding a `<queries>`
+   manifest declaration (`AndroidManifest.xml`) for the three intents, since
+   Android 11+ package-visibility filtering would otherwise make
+   `queryIntentActivities` return nothing for a non-privileged app.
+   **This still has not been confirmed on the physical A12** — this session
+   still has no `adb`/Android SDK (same limitation as the rest of Phase 2).
+   `DeviceOwnerPolicy` logs an `android.util.Log.w` warning if resolution
+   comes back empty, to make that debuggable on the next real-device session.
 9. **`storagePath` on `VaultTrackEntity` now stores the ingested file's own
    SAF document URI (`content://...`), not a relative path string.** The
    Phase 1 instrumented test's example data used a human-readable relative
@@ -391,10 +391,12 @@ at all inside the kiosk.**
 before starting Phase 3:
 1. Build on a machine with the Android SDK (`./gradlew :app:compileDebugKotlin
    assembleDebug`) — this has not happened for Phase 2's code yet.
-2. Install on the physical A12 and try "Add to vault" for real. Expect it to
-   be blocked by lockTask's package allowlist (key decision #8) — find the
-   actual resolving picker package via logcat/dumpsys, confirm with the user,
-   and add it to `DeviceOwnerPolicy.setLockTaskPackages` before re-testing.
+2. Install on the physical A12 and try "Add to vault" for real. The lockTask
+   package allowlist is now computed dynamically (key decision #8) so this
+   *should* just work — confirm the picker actually opens, and if it
+   doesn't, check logcat for `DeviceOwnerPolicy`'s "No package resolved..."
+   warning and `adb shell dumpsys activity activities | grep -E
+   'mLockTaskModeState|mLockTaskAuth'` to see what's actually happening.
 3. Once the picker actually opens: grant the SD-card folder, pick a real
    audio file, confirm it appears under "Your vault" with extracted
    metadata, confirm the file physically lands under `Paperweight/vault/` on
