@@ -27,6 +27,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.paperweight.os.ui.dashboard.broadcast.BroadcastScreen
 import com.paperweight.os.ui.dashboard.overview.OverviewScreen
 import kotlinx.coroutines.launch
 
@@ -100,7 +101,7 @@ private fun DashboardNavHost(navController: NavHostController, modifier: Modifie
         modifier = modifier,
     ) {
         composable(DashboardDestination.Overview.route) { OverviewScreen() }
-        composable(DashboardDestination.Broadcast.route) { ComingSoonScreen(DashboardDestination.Broadcast.label) }
+        composable(DashboardDestination.Broadcast.route) { BroadcastScreen() }
         composable(DashboardDestination.Schedule.route) { ComingSoonScreen(DashboardDestination.Schedule.label) }
         composable(DashboardDestination.Vault.route) { ComingSoonScreen(DashboardDestination.Vault.label) }
         composable(DashboardDestination.Station.route) { ComingSoonScreen(DashboardDestination.Station.label) }

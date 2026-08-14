@@ -36,8 +36,8 @@ from the previous session's local state to pick this up, only this repo and
   `DashboardAnalyticsApi`, `DashboardEarningsApi`, `AuthApi`.
 - **Navigation shell (M3)** — `ui/nav/DashboardApp.kt`: hamburger-triggered
   `ModalNavigationDrawer` + `NavHost` with all 9 destinations
-  (`DashboardDestination.kt`). Overview is real; the other 8 render
-  `ComingSoonScreen`.
+  (`DashboardDestination.kt`). Overview and Broadcast are real; the other 7
+  render `ComingSoonScreen`.
 - **Shared Compose primitives (M3)** — `ui/components/`: `ViewHeader`,
   `MetricTile`, `PanelCard`, `EmptyStateView`, and a `ScreenState` /
   `ScreenStateScaffold` pair every screen's ViewModel should use for uniform
@@ -49,6 +49,12 @@ from the previous session's local state to pick this up, only this repo and
   `analytics/history`, `earnings`, `analytics/activity` once per visit.
   Renders stat tiles, a Canvas-drawn week-over-week bar chart, and a recent
   activity list.
+- **Broadcast screen (M4, 2 of 9, partial)** — `ui/dashboard/broadcast/`:
+  real station rotation + broadcast queue controls matching `views/Broadcast.tsx`.
+  Polls `stream/status` and `dashboard/broadcast/queue` every 5s, can switch
+  shuffle/scheduled mode, restart broadcast, and remove queued tracks. Live mic
+  streaming (`dashboard/live/start|chunk|stop` with `AudioRecord`) is still the
+  stretch item from the original handoff.
 
 **Not yet tested on a real device or against a real backend** — this
 sandbox has no camera and no network path to a live `paperweightv1`
@@ -177,12 +183,16 @@ app/src/main/java/com/paperweight/os/
     ├── nav/                        // DashboardApp, DashboardDestination, ComingSoonScreen — done (M3)
     ├── components/                 // ViewHeader, MetricTile, PanelCard, EmptyStateView, ScreenState(Scaffold) — done (M3)
     └── dashboard/
-        └── overview/                // done (M4, 1/9) — reference pattern for the rest
-            ├── OverviewScreen.kt
-            ├── OverviewUiState.kt
-            └── OverviewViewModel.kt
-            // broadcast/, schedule/, vault/, station/, audience/,
-            // analytics/, earnings/, settings/ — not yet created
+        ├── overview/                // done (M4, 1/9) — reference pattern for the rest
+        │   ├── OverviewScreen.kt
+        │   ├── OverviewUiState.kt
+        │   └── OverviewViewModel.kt
+        ├── broadcast/               // done for rotation/queue; live mic is stretch
+        │   ├── BroadcastScreen.kt
+        │   ├── BroadcastUiState.kt
+        │   └── BroadcastViewModel.kt
+        // schedule/, vault/, station/, audience/,
+        // analytics/, earnings/, settings/ — not yet created
 ```
 
 ## Verification
