@@ -27,8 +27,15 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.paperweight.os.ui.dashboard.analytics.AnalyticsScreen
+import com.paperweight.os.ui.dashboard.audience.AudienceScreen
 import com.paperweight.os.ui.dashboard.broadcast.BroadcastScreen
+import com.paperweight.os.ui.dashboard.earnings.EarningsScreen
 import com.paperweight.os.ui.dashboard.overview.OverviewScreen
+import com.paperweight.os.ui.dashboard.schedule.ScheduleScreen
+import com.paperweight.os.ui.dashboard.settings.SettingsScreen
+import com.paperweight.os.ui.dashboard.station.StationScreen
+import com.paperweight.os.ui.dashboard.vault.VaultScreen
 import kotlinx.coroutines.launch
 
 // Studio's AppShell.tsx has a fixed 248px sidebar with a mobile-breakpoint
@@ -102,12 +109,12 @@ private fun DashboardNavHost(navController: NavHostController, modifier: Modifie
     ) {
         composable(DashboardDestination.Overview.route) { OverviewScreen() }
         composable(DashboardDestination.Broadcast.route) { BroadcastScreen() }
-        composable(DashboardDestination.Schedule.route) { ComingSoonScreen(DashboardDestination.Schedule.label) }
-        composable(DashboardDestination.Vault.route) { ComingSoonScreen(DashboardDestination.Vault.label) }
-        composable(DashboardDestination.Station.route) { ComingSoonScreen(DashboardDestination.Station.label) }
-        composable(DashboardDestination.Audience.route) { ComingSoonScreen(DashboardDestination.Audience.label) }
-        composable(DashboardDestination.Analytics.route) { ComingSoonScreen(DashboardDestination.Analytics.label) }
-        composable(DashboardDestination.Earnings.route) { ComingSoonScreen(DashboardDestination.Earnings.label) }
-        composable(DashboardDestination.Settings.route) { ComingSoonScreen(DashboardDestination.Settings.label) }
+        composable(DashboardDestination.Schedule.route) { ScheduleScreen() }
+        composable(DashboardDestination.Vault.route) { VaultScreen() }
+        composable(DashboardDestination.Station.route) { StationScreen() }
+        composable(DashboardDestination.Audience.route) { AudienceScreen() }
+        composable(DashboardDestination.Analytics.route) { AnalyticsScreen() }
+        composable(DashboardDestination.Earnings.route) { EarningsScreen() }
+        composable(DashboardDestination.Settings.route) { SettingsScreen() }
     }
 }
