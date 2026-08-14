@@ -1,10 +1,11 @@
 # Handoff: Paperweight OS build-out
 
 Written as the running handoff for the Paperweight OS Android build-out.
-The repo now has Milestones 0-3, Overview, and Broadcast rotation/queue
-controls implemented. This file is self-contained — a new session shouldn't
-need anything from the previous session's local state to pick this up, only
-this repo and `paperweightv1`.
+**All 9 Milestone 4 dashboard screens are now implemented**: Overview,
+Broadcast, Schedule, Vault, Station, Audience, Analytics, Earnings, and
+Settings. This file is self-contained — a new session shouldn't need
+anything from the previous session's local state to pick this up, only this
+repo and `paperweightv1`.
 
 ## Read first
 
@@ -14,10 +15,43 @@ this repo and `paperweightv1`.
   the literal source of truth for what each screen does and which endpoints
   it calls. Not a mockup, not a guess — read the real files when in doubt.
 
-## Status: what's built and verified
+## ⚠️ Critical: this session's code has NOT been compiled or run
+
+This is the single most important thing in this handoff. The 7 screens
+added this session (Schedule, Vault, Station, Audience, Analytics,
+Earnings, Settings — ~30 new Kotlin files) were written and manually
+reviewed, but **`./gradlew` could not be run at all** in this session's
+environment: its network policy blocks `dl.google.com`, which is where the
+Android Gradle Plugin and every AndroidX/Compose library live. Maven
+Central resolved fine; Google's Maven repo returned a hard `403 policy
+denial` on every attempt (confirmed via the proxy's own status endpoint,
+not a transient failure). `compileDebugKotlin` never got past plugin
+resolution.
+
+Concretely, that means:
+- Overview and Broadcast (prior session) were compiled, installed, and
+  smoke-tested on a real device — genuinely verified.
+- Schedule/Vault/Station/Audience/Analytics/Earnings/Settings (this
+  session) are **only** manually reviewed against the established pattern
+  and the real `paperweightv1` source — never compiled. Two real mistakes
+  were caught this way during review (a blocking `errorBody().string()`
+  call on the main dispatcher in `ScheduleViewModel`, fixed to run on
+  `Dispatchers.IO`; and a corrupted import line in `VaultScreen.kt` from a
+  careless `replace_all`, fixed). There is no guarantee more mistakes like
+  that don't remain — a compiler would have caught both instantly, and
+  wasn't available to catch anything else.
+- **The very first thing the next session must do is run the full
+  validation baseline below in an environment that can actually reach
+  `dl.google.com`** (a normal dev machine, or a remote environment
+  configured with a less restrictive network policy) and fix whatever
+  compile errors surface. Do not assume any of the 7 new screens work
+  until that's happened.
+
+## Status: what's built (compiled+device-verified vs. reviewed-only)
 
 - **Gradle project scaffold** — builds and installs on a real Galaxy A12.
   Latest verified on connected `SM-A125U` / API 30 with `adb install -r`.
+  *(Verified in an earlier session with a working local Android SDK.)*
 - **Device Owner / kiosk mode** — `admin/PaperweightDeviceAdminReceiver.kt`,
   provisioning flow, `provisioning/setup.sh`, reusable `DeviceOwnerPolicy`,
   boot/package-replaced receiver, lock-task retry logic, and policy-granted
@@ -31,36 +65,105 @@ this repo and `paperweightv1`.
   QR from Studio's existing "Pair a new device" feature, direct JSON POST to
   `/api/auth/dashboard/device/redeem` (no WebView), session persisted in
   `EncryptedSharedPreferences` via `network/SessionStore.kt`.
-- **Core networking (M2, partial)** — `network/ApiClient.kt` (Retrofit +
-  OkHttp with a `DynamicBaseUrlInterceptor` since the base URL is only known
-  after pairing), `SessionCookieJar.kt`. DTOs/Retrofit interfaces exist for
-  Overview and Broadcast: `AuthApi`, `StreamApi`, `LibraryApi`,
-  `DashboardAnalyticsApi`, `DashboardEarningsApi`, and `DashboardBroadcastApi`.
+- **Core networking (M2)** — `network/ApiClient.kt` (Retrofit + OkHttp with
+  a `DynamicBaseUrlInterceptor` since the base URL is only known after
+  pairing), `SessionCookieJar.kt`. Every dashboard area now has its own
+  Retrofit interface + models file (see repo layout below) wired into
+  `ApiClient`.
 - **Navigation shell (M3)** — `ui/nav/DashboardApp.kt`: hamburger-triggered
   `ModalNavigationDrawer` + `NavHost` with all 9 destinations
-  (`DashboardDestination.kt`). Overview and Broadcast are real; the other 7
-  render `ComingSoonScreen`.
-- **Shared Compose primitives (M3)** — `ui/components/`: `ViewHeader`,
-  `MetricTile`, `PanelCard`, `EmptyStateView`, and a `ScreenState` /
-  `ScreenStateScaffold` pair every screen's ViewModel should use for uniform
-  loading/error/content handling (no retry queue, no cache fallback, per
-  CLAUDE.md).
-- **Overview screen (M4, 1 of 9)** — `ui/dashboard/overview/`: fully wired
-  end-to-end. `OverviewViewModel` polls `stream/status` every 5s (matching
-  Studio's `refetchInterval`) and loads `library/structure`,
-  `analytics/history`, `earnings`, `analytics/activity` once per visit.
-  Renders stat tiles, a Canvas-drawn week-over-week bar chart, and a recent
-  activity list.
-- **Broadcast screen (M4, 2 of 9, partial)** — `ui/dashboard/broadcast/`:
-  real station rotation + broadcast queue controls matching `views/Broadcast.tsx`.
-  Polls `stream/status` and `dashboard/broadcast/queue` every 5s, can switch
-  shuffle/scheduled mode, restart broadcast, and remove queued tracks. Live mic
-  streaming (`dashboard/live/start|chunk|stop` with `AudioRecord`) is still the
-  stretch item from the original handoff.
+  (`DashboardDestination.kt`). **All 9 now route to real screens** —
+  `ComingSoonScreen` is gone, nothing references it anymore (deleted).
+- **Shared Compose primitives (M3+)** — `ui/components/`: `ViewHeader`,
+  `MetricTile`, `PanelCard`, `EmptyStateView`, `ScreenState`/
+  `ScreenStateScaffold`, and (new this session) `DropdownField` — a shared
+  label+tap-menu select used by every screen with a small fixed choice set,
+  promoted out of Schedule once Audience needed the same pattern.
+- **Overview (M4, compiled+device-verified)** — `ui/dashboard/overview/`:
+  polls `stream/status` every 5s, loads library/analytics/earnings once per
+  visit. Reference pattern for every screen since.
+- **Broadcast (M4, compiled+device-verified)** — `ui/dashboard/broadcast/`:
+  rotation mode, restart, queue poll/removal. Live mic streaming
+  (`AudioRecord` → `/api/dashboard/live/chunk`) is still an open stretch
+  item, not attempted this session (explicitly out of scope for this pass).
+- **Schedule (M4, reviewed-only)** — `ui/dashboard/schedule/`: blocks +
+  smart playlists CRUD (inline forms, no modal system), "next 24h" preview
+  panel, "enable scheduled mode" action. Real endpoints are `/api/schedule*`,
+  not `/api/dashboard/schedule*` — don't assume the `dashboard/` prefix
+  pattern holds here. Block/playlist mutations are desktop-platform gated
+  (403 possible) — surfaced via the server's real error message, not a
+  generic failure. No polling — Studio's three schedule queries have no
+  `refetchInterval`, unlike Overview/Broadcast.
+- **Analytics (M4, reviewed-only)** — `ui/dashboard/analytics/`: reuses the
+  pre-existing `DashboardAnalyticsApi` in full (no new Retrofit interface).
+  Only the `live` stats poll (10s, matching Studio's own interval — not the
+  5s used elsewhere). Canvas bar chart for 30-day history, same technique as
+  Overview's `WeekHistoryChart`. All-time "most played" is computed
+  client-side by joining `library/structure` with `analytics/playcounts`,
+  same as Studio does.
+- **Earnings (M4, reviewed-only)** — `ui/dashboard/earnings/`: reuses the
+  pre-existing `DashboardEarningsApi` in full. Revenue hero + mix bar, tip
+  presets editor (mirrors `TipConfigModal.tsx`: 3 dollar presets + a
+  custom-amount toggle), top earners. "Payment settings" button points at
+  the separately-built Settings screen (no shared modal system to reuse).
+- **Audience (M4, reviewed-only)** — `ui/dashboard/audience/`: today's
+  insights, audience-memory search/segments/people (live-updates via
+  `LaunchedEffect`, no debounce — matches Studio's own per-keystroke
+  refetch), marketing contacts, automations (pause/rule enable+mode/sweep/
+  send), participation (poll create/open-close, request accept/decline),
+  radio-host toggle (desktop-gated — a 403 on the initial load degrades
+  gracefully to a "locked" status rather than failing the whole screen,
+  since react-query treats each query independently and this port should
+  too for a known-gated endpoint), external catalog search + import. Rule
+  enable/mode updates are two *separate* single-field request DTOs
+  (`UpdateRuleEnabledRequest`/`UpdateRuleModeRequest`), not one dual-nullable
+  DTO — the server's automations route uses `input.mode !== undefined`
+  (strict-presence, not nullish-coalescing) so an explicit JSON `null` for
+  the field you're *not* touching would be read as "clear this field," not
+  "leave it alone." Worth remembering if more partial-update endpoints show
+  up in Vault/Station-style screens later.
+- **Station (M4, reviewed-only)** — `ui/dashboard/station/`: public URL,
+  Cloudflare tunnel (token/zone/hostname, connect/disconnect, 5s tunnel-
+  status poll only when a tunnel is actually configured/managed), directory
+  searchability (with the health recheck Studio triggers on failure),
+  telemetry secret, paperweighthq address, setup-progress checklist +
+  signup prompt. The itemized "which readiness check failed" list from
+  Studio's `searchable` error handling was *not* ported (would need parsing
+  a `checks` map out of a raw HTTP error body) — only the top-level error
+  message and the health recheck were kept. `milestones` values are
+  `occurred_at` timestamp strings (presence = reached), not booleans —
+  confirmed from the server route, not assumed from the JSDoc (which was
+  stale/wrong on this point).
+- **Vault (M4, reviewed-only, largest screen)** — `ui/dashboard/vault/`:
+  track + collection pricing (inline forms replacing `TrackPriceModal`/
+  `ProjectPriceModal`), collection track add/remove/reorder (up/down arrows,
+  computed reordered id list like Studio's `moveTrack`), artwork upload via
+  real `okhttp3.MultipartBody` (picked via
+  `rememberLauncherForActivityResult(GetContent())`, read off the main
+  thread), highlight toggle, access tokens (create+auto-assign, revoke,
+  tier change, per-token assignment management as an independently-fetched
+  side panel). "Access control" and "Add to vault" (new media upload) open
+  Studio modals with no Android equivalent screen — both stubbed as a
+  notice rather than invented. Collection delete uses an inline "Delete
+  this collection? Yes/No" confirm instead of `window.confirm`.
+- **Settings (M4, reviewed-only)** — `ui/dashboard/settings/`: workspace
+  motion toggle (genuinely local/ephemeral, matches Studio's own
+  unpersisted `useState`), notifications (webhook + go-live toggle), RSS
+  feed (enable + scope), track glow color (hex text field + swatch preview
+  — no native color-picker widget, a deliberate scope trim), listener
+  account recovery (email → reset link → copy), docs viewer (list + inline
+  content panel instead of a modal; `/api/docs/{id}` returns raw
+  text/Markdown, not JSON, so it's fetched as `okhttp3.ResponseBody` and
+  decoded manually off the main thread — not run through the shared
+  kotlinx.serialization converter). **`DesktopSection` intentionally
+  dropped entirely** — confirmed decision #6 below, no Electron-equivalent
+  bridge exists or should be invented on Android.
 
-## Validation status and remaining live-backend gap
+## Validation status and remaining gaps
 
-Local Android validation has been run successfully in this environment:
+Local Android validation **could not be run this session** — see the
+critical network-policy note above. The baseline that was verified in an
+**earlier** session (with a working local SDK) was:
 
 ```text
 ./gradlew :app:compileDebugKotlin
@@ -70,7 +173,11 @@ Local Android validation has been run successfully in this environment:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Latest physical-device facts observed:
+That baseline covered Overview and Broadcast only. **Re-run the full
+baseline against all 9 screens before trusting any of this session's
+code.**
+
+Latest physical-device facts observed (from the earlier session):
 
 ```text
 device: R58RB5AYA7L
@@ -80,103 +187,115 @@ package: com.paperweight.os
 kiosk: pairing.PairingActivity, lock-task returns to LOCKED after HOME
 ```
 
-Still not fully exercised against a real paired backend: the QR redeem flow,
-Overview data rendering, and Broadcast actions need `npm run dev` (or a deployed
-Paperweight station) on the same Wi-Fi as the A12, with a browser logged into
-Studio showing the pairing QR. Do not claim backend end-to-end success until the
-A12 is actually paired and the screens hit real station endpoints.
+Still not exercised against a real paired backend — this predates this
+session and remains true: the QR redeem flow, and every screen's data
+rendering/mutations, need `npm run dev` (or a deployed Paperweight station)
+on the same Wi-Fi as the A12, with a browser logged into Studio showing the
+pairing QR. Do not claim backend end-to-end success for *any* screen,
+including the previously-verified Overview/Broadcast, until that pairing
+has actually happened and been exercised.
 
-Known caution points:
-1. The QR redeem flow itself (parsing `pairUrl`, POSTing
-   `/api/auth/dashboard/device/redeem`, capturing `Set-Cookie`) has not been
-   live-paired yet in this handoff.
-2. `LibraryStructure`/`LibraryTrack` DTOs in
-   `network/models/LibraryModels.kt` were pulled from
-   `paperweightv1/src/api/library.js`'s `formatItem()` and still need a live
-   JSON round-trip.
-3. `BroadcastQueueItem` intentionally accepts both `id` and legacy `mediaId`
-   because `views/Broadcast.tsx` typed `mediaId`, while the current Express
-   endpoint returns `id`.
+Known caution points (compounding the ones already listed above per
+screen):
+1. The QR redeem flow itself has still not been live-paired in any session.
+2. `LibraryStructure`/`LibraryTrack` DTOs were pulled from
+   `paperweightv1/src/api/library.js`'s `formatItem()` and still need a
+   live JSON round-trip.
+3. `BroadcastQueueItem` intentionally accepts both `id` and legacy
+   `mediaId` because `views/Broadcast.tsx` typed `mediaId`, while the
+   current Express endpoint returns `id`.
+4. Every new DTO this session was written by reading the real
+   `paperweightv1` server route handlers (not just `api.js`'s JSDoc, which
+   was caught being stale/wrong at least once — Station's `setupProgress`
+   milestones) — but none of it has been round-tripped against a live
+   server. Treat field names as "best evidence from source reading," not
+   "confirmed."
 
 ## Key decisions made this session (don't re-litigate these without reason)
 
-These were explicit, confirmed choices — see the a12 CLAUDE.md for the
-durable version, but the reasoning is worth carrying forward:
+Carried forward from the previous session (still valid, see a12's
+CLAUDE.md for the durable version):
 
-1. **Not the old "Mission Control" mockup.** a12's original CLAUDE.md
-   described a single-screen port of `paperweightv1/new_pieces/
-   studio-mission-control.html`. That mockup was abandoned. The real target
-   is the live Creator Studio dashboard (`studio/src/AppShell.tsx`).
-2. **Scope is 9 screens, not 1**: Overview, Broadcast, Schedule, Vault,
-   Station, Audience, Analytics, Earnings, **and Settings** — Settings was
-   explicitly confirmed as an intentional override of CLAUDE.md's original
-   "no settings shortcuts" language (this kiosk should be "a fully
-   functioning version of Paperweight," per the user). Deferred to a later
-   phase: Activity, Releases, Profile, Tools, Security, and the Stack/Player
-   modes.
-3. **Full read+write control**, not a read-only monitor — screens should
-   wire real mutations, matching what Studio's views actually do.
-4. **Auth is QR pairing**, reusing paperweightv1's existing device-pairing
-   feature (`POST /api/dashboard/devices/pair` on an already-authenticated
-   Studio session → QR → `POST /api/auth/dashboard/device/redeem`). This
-   resolves both the station's base URL and the session credential in one
-   scan. No WebView — the redeem call is plain JSON + a `Set-Cookie`
-   response, called directly.
-5. **Design tokens match the real Studio app**, not CLAUDE.md's original
-   stale spec (which was written against the abandoned mockup): lime
-   primary `hsl(69,100%,65%)` ≈ `#E4FF4D`, coral accent `hsl(7,84%,68%)` ≈
-   `#F27969`, red destructive `hsl(4,76%,61%)` ≈ `#E75A50`, near-black
-   background. Fonts are Manrope (body) + Space Grotesk (display/headlines)
-   + DM Mono (eyebrow/mono labels) — not DM Serif Display/Space Mono.
-   Sourced from Google Fonts (both Manrope and Space Grotesk are variable
-   fonts; DM Mono is static weights).
-6. **`window.desktopAPI`-gated Settings sections don't port.** Studio's
-   `SettingsView.tsx` has a `DesktopSection` that only renders inside the
-   Electron app (IPC to quit/restart/uninstall/import-folder). There's no
-   Android equivalent and no reason to invent one — just omit it, it isn't a
-   CLAUDE.md scope question, the bridge simply doesn't exist here.
+1. **Not the old "Mission Control" mockup** — the real target is the live
+   Creator Studio dashboard (`studio/src/AppShell.tsx`).
+2. **Scope is 9 screens**: Overview, Broadcast, Schedule, Vault, Station,
+   Audience, Analytics, Earnings, and Settings — all 9 are now built.
+   Deferred: Activity, Releases, Profile, Tools, Security, Stack/Player.
+3. **Full read+write control**, not a read-only monitor.
+4. **Auth is QR pairing** — no WebView, direct JSON POST + `Set-Cookie`.
+5. **Design tokens match the real Studio app** — lime/coral/red/near-black,
+   Manrope/Space Grotesk/DM Mono.
+6. **`window.desktopAPI`-gated Settings sections don't port** —
+   `DesktopSection` omitted entirely, now actually implemented as omitted
+   (Settings screen shipped this session without it).
 
-## What's left: Milestone 4 (remaining screens + Broadcast live stretch) and Milestone 5 (hardening)
+New this session:
 
-Each screen follows the same pattern already established by Overview:
-1. Read the real screen source in `paperweightv1/studio/src/views/*.tsx`
-   (already read once this session — see notes below per screen — but
-   re-read for exact field names before writing DTOs, don't rely on memory).
-2. Add DTOs to `network/models/` and a Retrofit interface to `network/`,
-   matching `studio/src/lib/api.js`'s exact documented request/response
-   shapes for that view's endpoints. Wire new interfaces into
-   `ApiClient.kt`.
-3. Add a `ui/dashboard/<screen>/` package: `<Screen>UiState.kt`,
-   `<Screen>ViewModel.kt` (extends `AndroidViewModel`, exposes
-   `StateFlow<ScreenState<UiState>>`, uses `ApiClient`), `<Screen>Screen.kt`
-   (Composable, uses `ScreenStateScaffold` + the shared primitives).
-4. Swap that destination's `ComingSoonScreen(...)` for the real screen in
-   `ui/nav/DashboardApp.kt`'s `DashboardNavHost`.
+7. **This remote execution environment cannot build Android at all.**
+   `dl.google.com` is blocked by network policy (confirmed `403 policy
+   denial`, not a transient error) — the Android Gradle Plugin and every
+   AndroidX/Compose dependency live there. Maven Central alone isn't
+   enough. Flag this immediately in any future session that opens in a
+   similarly-restricted remote environment rather than assuming Gradle
+   will "just work" because it did in a prior local session.
+8. **7 screens were implemented without any compiler in the loop** — user
+   was informed of this mid-session and explicitly chose to continue
+   anyway ("Continue without building") rather than stop after one screen
+   or wait for a network-policy fix. This was the right call for making
+   progress, but it means the honest status is "reviewed, not verified,"
+   and the next session must not upgrade that to "verified" without
+   actually compiling.
+9. **`DropdownField` promoted to a shared component** the moment a second
+   screen (Audience) needed the same label+tap-menu select Schedule had
+   built privately — follow this same "wait for the second occurrence,
+   then promote" discipline for any other pattern that repeats across the
+   remaining Milestone 5 work.
+10. **Desktop-platform-gated endpoints (403) get their error message
+    surfaced, not swallowed into a generic failure** — first needed for
+    Schedule's block/playlist mutations, then reused for Audience's
+    radio-host/external-import and Vault/Station's various mutations. If
+    this pattern shows up a third+ time in Milestone 5, it's a good
+    candidate for promotion into a shared `HttpException` extension
+    (currently duplicated per-ViewModel, matching the established
+    one-file-per-screen self-containment convention — see CLAUDE.md
+    "Working conventions").
+11. **No client-side modal system exists**, so every screen that opens a
+    Studio "modal" (`TrackPriceModal`, `ProjectPriceModal`, docs viewer,
+    uninstall-confirm, etc.) got ported as an inline expandable
+    `PanelCard` instead — consistent across Schedule/Vault/Settings. Two
+    modals that don't correspond to a *built* Android screen or feature
+    (Vault's "Access control"/"Add to vault", both gated behind features
+    this pass didn't implement) were stubbed as a one-line notice via each
+    ViewModel's `notify()` rather than inventing new screens beyond
+    HANDOFF's stated scope.
 
-Screen-by-screen notes (source file, endpoints, what's notable) — this is
-the same table from the original build plan:
+## What's left: Milestone 5 (hardening)
 
-| Screen | Source | Key endpoints (see `api.js` for exact shapes) | Notes |
-|---|---|---|---|
-| **Broadcast** | `views/Broadcast.tsx` | `stream/status`, `dashboard/broadcast/queue` (5s poll), `dashboard/broadcast/mode`\|`restart`, `dashboard/live/status`\|`start`\|`chunk`\|`stop` | Rotation mode, restart, queue poll, and queue removal are implemented in native Compose. Remaining stretch: "Go live" mic streaming via `AudioRecord` → PCM chunk POST to `/api/dashboard/live/chunk` plus status/start/stop controls. |
-| **Schedule** | `views/ScheduleView.tsx` | `dashboard/schedule` CRUD, `schedule/smart-playlists` CRUD, `schedule/preview` | Two list+form sections (blocks, smart playlists) plus a 24h preview panel. Straightforward CRUD forms. |
-| **Vault** | `views/Vault.tsx` | `dashboard/vault/pricing`, `.../highlight`, `dashboard/media`, `dashboard/accounts`, `dashboard/tokens` (+assignments), `dashboard/media/{id}/artwork` (multipart) | Largest screen (353 lines source). Pricing forms, collection management, access tokens. Multipart artwork upload needs `okhttp3.MultipartBody`. |
-| **Station** | `views/Station.tsx` | `dashboard/station`, `.../health`, `.../cloudflare/*`, `.../telemetry/*`, `dashboard/setup-progress` | Public URL / tunnel / telemetry config; several independent mutation groups, mostly simple forms + status chips. |
-| **Audience** | `views/AudienceView.tsx` | `dashboard/today`, `.../audience-memory/*`, `dashboard/audience`, `dashboard/automations`, `dashboard/participation/*`, `dashboard/creator-type`, `dashboard/radio-host`, `dashboard/external-search` | Dense (124 lines) but mostly list+toggle patterns, no unusual complexity. |
-| **Analytics** | `views/Analytics.tsx` | `dashboard/analytics/live`\|`history`\|`top`\|`subscribers`\|`playcounts`, `library/structure` | `DashboardAnalyticsApi` already has most of what's needed (`live`, `history`, `top`, `subscribers`, `playcounts` all already defined) — this screen is mostly UI work, reusing the existing API interface. Canvas bar charts, same technique as Overview's `WeekHistoryChart`. |
-| **Earnings** | `views/Earnings.tsx` | `dashboard/earnings`, `dashboard/tip-config` | `DashboardEarningsApi` already exists in full (`earnings()`, `tipConfig()`, `updateTipConfig()`) — this screen is UI-only work reusing what's already there. Revenue mix bar, top-earners list. |
-| **Settings** | `views/SettingsView.tsx` | `dashboard/settings` (get/update), `dashboard/accounts` + `.../reset-link`, `api/docs` | **Drop `DesktopSection` entirely** (see decision #6 above). Everything else — notifications/webhook, RSS feed toggle, track glow color, account recovery link generator, docs viewer — is standard form/list work. |
-
-After all 9 screens: **Milestone 5 (hardening)** —
-- Session-loss handling: a 401 from any call should route back to
+With all 9 screens now built, this is next:
+- **Actually compile and run this session's 7 new screens** — see the
+  critical note at the top. Nothing below matters until this happens.
+- **Session-loss handling**: a 401 from any call should route back to
   `PairingActivity` (clear `SessionStore`, `startActivity` + `finish`), not
-  crash or silently retry. Not yet implemented anywhere.
-- Sweep every screen's `ViewModel` for consistent use of `ScreenState` /
-  `ScreenStateScaffold` — Overview's `OverviewViewModel` is the reference
-  pattern (single `Job`, cancel-and-relaunch on retry, one-shot load +
-  optional light polling).
-- Re-confirm the "no retry queue, no local cache fallback, no crash" network
-  constraint holds on every screen, not just Overview.
+  crash or silently retry. Confirmed via full-tree search this session:
+  **still not implemented anywhere** — zero matches for `401` or
+  `HttpException`-based session handling outside the per-screen
+  desktop-gate (403) handling added this session. The natural place is
+  likely a shared OkHttp `Authenticator`/`Interceptor` in `ApiClient.kt`
+  (one place) rather than duplicating a 401 check across all 9
+  ViewModels — this is a good candidate for the "third occurrence,
+  promote to shared" rule mentioned above, except session-loss handling
+  needs to happen exactly once per app regardless of occurrence count.
+- **Sweep every screen's ViewModel** for consistent `ScreenState`/
+  `ScreenStateScaffold` usage — now that there are 9 examples instead of
+  2, it's worth double-checking Schedule/Analytics/Earnings' "no poll, one-
+  shot load" screens against Overview/Broadcast/Station's "some fields
+  poll" screens for any drift, now that both patterns are established.
+- **Re-confirm "no retry queue, no local cache fallback, no crash"** holds
+  on all 9 screens, not just Overview — this was the design intent
+  throughout this session's new code but was never verified by actually
+  running it.
+- **Broadcast's live-mic stretch** (`AudioRecord` → `/api/dashboard/live/
+  chunk`) — still open, not attempted this or the previous session.
 
 ## Repo layout as of this handoff
 
@@ -189,33 +308,40 @@ app/src/main/java/com/paperweight/os/
 │   ├── PairingScreen.kt
 │   ├── PairingViewModel.kt
 │   └── QrCodeAnalyzer.kt
-├── provisioning/SetupActivity.kt   // device-owner claim wait screen
-├── network/                        // M2, partial — grows per-screen from here
-│   ├── ApiClient.kt                // wire new *Api interfaces in here
+├── provisioning/SetupActivity.kt   // one-time device-owner claim flow
+├── network/                        // M2, one Api interface + models file per area
+│   ├── ApiClient.kt                // every *Api interface wired in here
 │   ├── AuthApi.kt / StreamApi.kt / LibraryApi.kt
 │   ├── DashboardAnalyticsApi.kt / DashboardEarningsApi.kt / DashboardBroadcastApi.kt
+│   ├── DashboardScheduleApi.kt / DashboardAudienceApi.kt / DashboardStationApi.kt
+│   ├── DashboardVaultApi.kt / DashboardSettingsApi.kt
 │   ├── SessionStore.kt / SessionCookieJar.kt / DynamicBaseUrlInterceptor.kt
 │   └── models/                     // DTOs, grouped like studio's api.js
 └── ui/
     ├── theme/                      // Color/Type/Shape/Theme.kt — done (M0)
-    ├── nav/                        // DashboardApp, DashboardDestination, ComingSoonScreen — done (M3)
-    ├── components/                 // ViewHeader, MetricTile, PanelCard, EmptyStateView, ScreenState(Scaffold) — done (M3)
+    ├── nav/                        // DashboardApp, DashboardDestination — done (M3), all 9 wired
+    ├── components/                 // ViewHeader, MetricTile, PanelCard, EmptyStateView,
+    │                                //   ScreenState(Scaffold), DropdownField — done
     └── dashboard/
-        ├── overview/                // done (M4, 1/9) — reference pattern for the rest
-        │   ├── OverviewScreen.kt
-        │   ├── OverviewUiState.kt
-        │   └── OverviewViewModel.kt
-        ├── broadcast/               // done for rotation/queue; live mic is stretch
-        │   ├── BroadcastScreen.kt
-        │   ├── BroadcastUiState.kt
-        │   └── BroadcastViewModel.kt
-        // schedule/, vault/, station/, audience/,
-        // analytics/, earnings/, settings/ — not yet created
+        ├── overview/                // done (M4), compiled+device-verified — reference pattern
+        ├── broadcast/               // done for rotation/queue, compiled+device-verified; live mic is stretch
+        ├── schedule/                // done (M4), reviewed-only this session
+        ├── analytics/                // done (M4), reviewed-only this session
+        ├── earnings/                 // done (M4), reviewed-only this session
+        ├── audience/                 // done (M4), reviewed-only this session
+        ├── station/                  // done (M4), reviewed-only this session
+        ├── vault/                    // done (M4), reviewed-only this session, largest
+        └── settings/                 // done (M4), reviewed-only this session
 ```
 
 ## Verification
 
-Current Android validation baseline:
+**First**, confirm the build environment can actually reach
+`dl.google.com` (`curl -sS -o /dev/null -w "%{http_code}\n" https://dl.google.com/`
+should return `200`, not a proxy error) — do not waste time debugging
+"broken" Kotlin code before ruling out an environment/network problem.
+
+Then the standard baseline:
 
 ```bash
 export JAVA_HOME="$HOME/.local/jdks/jdk-17"
@@ -230,7 +356,10 @@ export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-End-to-end station validation still requires `npm run dev` in `paperweightv1`
-on the same Wi-Fi as the A12, then pairing via Studio's "Pair a new device" QR.
-After pairing, smoke Overview and Broadcast against the real backend before
-claiming network/runtime correctness.
+Fix whatever `compileDebugKotlin` surfaces first — that's the highest-value
+next step in this entire project right now, ahead of any new feature work.
+
+After a clean compile, install and navigate to each of the 7 new
+destinations via the drawer to confirm they render without crashing before
+attempting a live-backend pairing session (`npm run dev` in `paperweightv1`
+on the same Wi-Fi as the A12, then "Pair a new device" from Studio).

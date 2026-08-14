@@ -40,4 +40,9 @@ class ApiClient(context: Context) {
     val analytics: DashboardAnalyticsApi by lazy { create(DashboardAnalyticsApi::class.java) }
     val earnings: DashboardEarningsApi by lazy { create(DashboardEarningsApi::class.java) }
     val broadcast: DashboardBroadcastApi by lazy { create(DashboardBroadcastApi::class.java) }
+    val schedule: DashboardScheduleApi by lazy { create(DashboardScheduleApi::class.java) }
+    val audience: DashboardAudienceApi by lazy { create(DashboardAudienceApi::class.java) }
+    val station: DashboardStationApi by lazy { create(DashboardStationApi::class.java) }
+    val vault: DashboardVaultApi by lazy { create(DashboardVaultApi::class.java) }
+    val settings: DashboardSettingsApi by lazy { create(DashboardSettingsApi::class.java) }
 }
