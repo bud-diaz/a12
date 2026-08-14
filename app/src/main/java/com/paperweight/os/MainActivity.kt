@@ -6,11 +6,15 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import com.paperweight.os.admin.DeviceOwnerPolicy
-import com.paperweight.os.network.SessionStore
-import com.paperweight.os.pairing.PairingActivity
 import com.paperweight.os.provisioning.SetupActivity
+import com.paperweight.os.storage.SdCardDetector
+import com.paperweight.os.storage.SdCardMountState
 import com.paperweight.os.ui.nav.DashboardApp
+import com.paperweight.os.ui.setup.SdCardRequiredScreen
 import com.paperweight.os.ui.theme.PaperweightOSTheme
 
 class MainActivity : ComponentActivity() {
@@ -30,15 +34,21 @@ class MainActivity : ComponentActivity() {
 
         DeviceOwnerPolicy.apply(this)
 
-        if (!SessionStore(applicationContext).isPaired) {
-            startActivity(Intent(this, PairingActivity::class.java))
-            finish()
-            return
-        }
-
         setContent {
             PaperweightOSTheme {
-                DashboardApp()
+                // Boot chain: Device Owner (above) -> SD card present/sized
+                // -> dashboard. No pairing step anymore — the app is its own
+                // backend. hasSdCard is a live Flow so pulling the card mid-
+                // session drops back to the gate instead of crashing.
+                val appContext = applicationContext
+                val hasSdCard by remember { SdCardMountState.observe(appContext) }
+                    .collectAsState(initial = SdCardDetector.hasValidCard(appContext))
+
+                if (hasSdCard) {
+                    DashboardApp()
+                } else {
+                    SdCardRequiredScreen()
+                }
             }
         }
     }
