@@ -35,4 +35,8 @@ class ApiClient(context: Context) {
     fun <T> create(service: Class<T>): T = retrofit.create(service)
 
     val auth: AuthApi by lazy { create(AuthApi::class.java) }
+    val stream: StreamApi by lazy { create(StreamApi::class.java) }
+    val library: LibraryApi by lazy { create(LibraryApi::class.java) }
+    val analytics: DashboardAnalyticsApi by lazy { create(DashboardAnalyticsApi::class.java) }
+    val earnings: DashboardEarningsApi by lazy { create(DashboardEarningsApi::class.java) }
 }
