@@ -545,6 +545,76 @@ stat -c '%s' app/build/outputs/apk/debug/app-debug.apk
   publication, and real generated-WAV audio segment generation on the physical
   A12.
 
+**Phase 5 (Embedded server + listener player) is code-complete but NOT build- or
+device-validated this session.** This pass was done from a remote Claude Code
+session/container that has JDK 21 but no `ANDROID_HOME`, no Android SDK, and no
+`adb` — `./gradlew` could not be invoked and no physical device was reachable.
+Per this file's/CLAUDE.md's "no fake success" rule, treat everything below as
+code-complete-and-self-reviewed only, not verified, until run on Bud's local
+machine (`JAVA_HOME=.../jdk-17` + `ANDROID_HOME=.../Sdk` + connected `SM-A125U`).
+
+New `server/` package:
+- `EmbeddedHttpServer.kt` — extends NanoHTTPD (already a Gradle dependency
+  since Phase 0/1, unused until now), binds `0.0.0.0:<AppPreferences.serverPort>`
+  (read once at construction — a port change needs a `BroadcastService` restart
+  to take effect, same "restart required" shape `paperweightv1`'s own dashboard
+  API uses for equivalent config changes). Routes by URI prefix to the handlers
+  below.
+- `routes/PlaylistRoute.kt` — serves `<filesDir>/hls/live.m3u8` (the file
+  `PlaylistWriter`/`SegmentStore` already atomically rewrite every rotation
+  tick) as `application/vnd.apple.mpegurl`, never cached.
+- `routes/SegmentRoute.kt` — serves `init.aac`/`segment-<n>.aac` from the same
+  `<filesDir>/hls/` directory as `audio/aac`, cacheable (segments are
+  immutable once written). The requested filename is validated against an
+  exact `(init|segment-\d+)\.aac` pattern before touching the filesystem —
+  the only thing between an inbound LAN request and path traversal.
+- `routes/StatusRoute.kt` — small JSON (`isRunning`, now-playing title/artist,
+  elapsed/duration, listener/queue counts) read straight from
+  `BroadcastEngine.state.value`, polled by the listener page.
+- `routes/ListenerWebRoute.kt` — serves the vendored static assets below out
+  of `assets/listener/` via `context.assets.open(...)`.
+- `RangeResponse.kt` — shared `Range:` header parsing → HTTP 206 partial
+  responses, used by both the playlist and segment routes.
+- Route map: live manifest at `/live/playlist.m3u8`, segments at
+  `/live/<filename>`, status at `/status`, listener page at `/`.
+- Deliberately **not built**: `VaultVodRoute` (private-track VOD gating is
+  Phase 8 scope, not built) and `TelemetryRoute` (Phase 9/10 scope) — same
+  per-phase-only discipline as every prior phase.
+
+New `app/src/main/assets/listener/` (vendored, no CDN references, per plan
+decision #2's "vendored, not CDN" requirement):
+- `index.html`/`styles.css`/`player.js` — hand-written, minimal audio-only
+  listener page. `player.js` uses `Hls.isSupported()` → hls.js path, falls
+  back to native `<audio>` HLS for Safari/iOS, polls `/status` every 5s for
+  the "now playing" line.
+- `hls.min.js` (+ `hls.min.js.LICENSE.txt`) — actual hls.js **1.6.16** UMD
+  minified build, fetched from the real npm registry tarball
+  (`registry.npmjs.org/hls.js/-/hls.js-1.6.16.tgz`) during this session and
+  vendored as a static asset. Version chosen to match `paperweightv1`'s own
+  `package.json` pin (`"hls.js": "^1.6.16"`) rather than picking an arbitrary
+  version, so behavior parity with the existing product is intentional.
+
+Wiring:
+- `ServiceLocator.kt` gained `embeddedHttpServer`, composed from
+  `appContext` + `appPreferences` + the existing `broadcastEngine`.
+- `BroadcastService.kt` now starts `embeddedHttpServer.startServer()`
+  alongside the existing `broadcastEngine.start()` in both `onCreate()` and
+  `onStartCommand()`, and gained an `onDestroy()` override (didn't exist
+  before) that stops the server and cancels a new internal `serviceScope`.
+- After starting, the service resolves the device's current LAN IPv4 via a
+  new `server/LanAddress.kt` helper (`ConnectivityManager` active-network
+  link addresses, first non-loopback IPv4) and upserts `localPort`/`lanUrl`
+  into the existing-but-previously-unused `StationProfileEntity` columns via
+  `StationRepository`. This deliberately does **not** touch
+  `StationScreen`/`StationViewModel` (still the Phase-0 error stub) — Phase 9
+  is what reads this field and rewires Station's UI; Phase 5 only populates
+  the data so Phase 9 has something real to display.
+
+**Known gap, not yet exercised:** actual LAN/VLC/browser playback from a
+second device on the same Wi-Fi (the plan's own Phase 5 verification step)
+could not be attempted — no physical A12, no LAN, no second device reachable
+from this session. This is the next real-device step before Phase 5 closes.
+
 ## Key decisions made this session (don't re-litigate without reason)
 
 1. **`network/models/*.kt` DTOs are deliberately kept for now**, despite
@@ -660,19 +730,19 @@ Phase 3 remaining real-device recovery validation:
    data/reinstall, grant/select the `Paperweight` folder, choose restore, and
    confirm vault metadata/config returns without re-ingesting media.
 
-Phase 4 is closed for the local broadcast-engine core. Remaining playback work is
-Phase 5 scope: serve the generated `live.m3u8`/`.aac` files over NanoHTTPD with
-Range support, add the bundled listener player, and do the LAN/VLC/browser
-playback validation from another device on the same Wi-Fi.
+Phase 5 is code-complete (server + listener assets) but still needs the real
+LAN/VLC/browser playback pass from another device, plus a first
+`./gradlew`/install/smoke pass on Bud's machine — see the Phase 5 section
+above.
 
-Phases 5–12 per the plan file, once Phase 4 is complete:
-1. **Phase 5 — Embedded server + listener player**: NanoHTTPD routes with Range
-   support, vendored listener web assets, LAN playback.
-2. Phases 6–12 as detailed in the plan file.
+Phases 6, 7, 8, 10, and 12 (mic go-live, scheduling, access tokens,
+analytics/audience, final polish) were **not** touched this session — the
+user asked specifically for phases 5, 9, and 11, in that order, skipping the
+others for now. Pick those up per the plan file when scoped.
 
-Also still open, carried in the plan itself: the frp registration contract
-(Phase 9) needs to be read directly from `paperweightv1` in a local session
-where that repo is available — don't guess it.
+The frp registration contract open item for Phase 9 is now resolved — see the
+Phase 9 section below for what was read directly out of `bud-diaz/paperweightv1`
+and what got built from it.
 
 ## Repo layout as of this handoff
 

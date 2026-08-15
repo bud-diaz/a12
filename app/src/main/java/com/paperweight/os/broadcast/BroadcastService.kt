@@ -9,22 +9,63 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.paperweight.os.R
+import com.paperweight.os.data.db.entity.StationProfileEntity
 import com.paperweight.os.di.ServiceLocator
+import com.paperweight.os.server.LanAddress
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class BroadcastService : Service() {
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification("Broadcast engine starting…"))
-        ServiceLocator.get(this).broadcastEngine.start()
+        val services = ServiceLocator.get(this)
+        services.broadcastEngine.start()
+        services.embeddedHttpServer.startServer()
+        publishLanUrl()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        ServiceLocator.get(this).broadcastEngine.start()
+        val services = ServiceLocator.get(this)
+        services.broadcastEngine.start()
+        services.embeddedHttpServer.startServer()
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        ServiceLocator.get(this).embeddedHttpServer.stopServer()
+        serviceScope.cancel()
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun publishLanUrl() {
+        val services = ServiceLocator.get(this)
+        serviceScope.launch {
+            val port = services.appPreferences.serverPort.first()
+            val ip = LanAddress.currentIpv4(this@BroadcastService)
+            val lanUrl = ip?.let { "http://$it:$port" }
+            val stationName = services.appPreferences.stationName.first()
+            val existing = services.stationRepository.getProfile()
+            val now = System.currentTimeMillis()
+            services.stationRepository.upsertProfile(
+                (existing ?: StationProfileEntity(
+                    stationName = stationName,
+                    localPort = port,
+                    createdAt = now,
+                    updatedAt = now,
+                )).copy(localPort = port, lanUrl = lanUrl, updatedAt = now),
+            )
+        }
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

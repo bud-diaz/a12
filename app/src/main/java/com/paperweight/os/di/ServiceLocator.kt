@@ -10,6 +10,7 @@ import com.paperweight.os.data.repository.StationRepository
 import com.paperweight.os.data.repository.TokenRepository
 import com.paperweight.os.data.repository.VaultRepository
 import com.paperweight.os.broadcast.BroadcastEngine
+import com.paperweight.os.server.EmbeddedHttpServer
 import com.paperweight.os.vault.VaultIngestor
 
 class ServiceLocator private constructor(context: Context) {
@@ -24,6 +25,7 @@ class ServiceLocator private constructor(context: Context) {
     val stationRepository: StationRepository by lazy { StationRepository(database.stationDao()) }
     val broadcastRepository: BroadcastRepository by lazy { BroadcastRepository(vaultRepository, scheduleRepository, stationRepository) }
     val broadcastEngine: BroadcastEngine by lazy { BroadcastEngine(appContext, broadcastRepository) }
+    val embeddedHttpServer: EmbeddedHttpServer by lazy { EmbeddedHttpServer(appContext, appPreferences, broadcastEngine) }
 
     companion object {
         @Volatile private var INSTANCE: ServiceLocator? = null

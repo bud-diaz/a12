@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Paperweight Station</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="listener">
+    <h1 id="station-name">Paperweight Station</h1>
+    <p id="now-playing" class="now-playing">Connecting…</p>
+
+    <audio id="player" preload="none"></audio>
+
+    <button id="play-button" type="button">Play</button>
+    <p id="player-status" class="player-status"></p>
+  </main>
+
+  <script src="hls.min.js"></script>
+  <script src="player.js"></script>
+</body>
+</html>
