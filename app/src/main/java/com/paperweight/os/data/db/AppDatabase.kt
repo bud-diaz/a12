@@ -35,7 +35,7 @@ import com.paperweight.os.data.db.entity.VaultTrackEntity
         ListenerSessionEntity::class,
         StationProfileEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {

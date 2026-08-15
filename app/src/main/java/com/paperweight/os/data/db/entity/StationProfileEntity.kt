@@ -12,6 +12,7 @@ data class StationProfileEntity(
     val localPort: Int,
     val lanUrl: String? = null,
     val publicUrl: String? = null,
+    val lastReachableAt: Long? = null,
     val createdAt: Long,
     val updatedAt: Long,
 ) {

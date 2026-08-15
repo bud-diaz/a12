@@ -615,6 +615,139 @@ second device on the same Wi-Fi (the plan's own Phase 5 verification step)
 could not be attempted — no physical A12, no LAN, no second device reachable
 from this session. This is the next real-device step before Phase 5 closes.
 
+**Phase 9 (Reachability / frp tunnel) is code-complete but NOT build- or
+device-validated this session** (same remote-container caveat as Phase 5
+above — no `ANDROID_HOME`/SDK/`adb` here).
+
+**The plan's open item is resolved.** This session used `add_repo` to clone
+`bud-diaz/paperweightv1` read-only into this environment (it isn't a repo
+this session started with in scope, but a public GitHub repo can still be
+cloned via the session's git proxy) and read the real registration contract
+directly out of `src/api/dashboard.js`, `src/runtime/frp-config.js`,
+`src/runtime/frp-supervisor.js`, `src/telemetry/reporter.js`, and
+`docs/frp-tunnel-gateway.md`, instead of guessing it. The contract:
+
+1. `POST {PAPE_URL}/api/modules/paperweight/register` — body
+   `{slug, stationKey, secret}`. `200` on success; `409` means the slug is
+   already claimed by another station (this endpoint *is* the slug-claim
+   mechanism — trust-on-first-use, no separate "claim" call).
+2. `POST {PAPE_URL}/api/modules/paperweight/frp/tunnel/create` — header
+   `x-telemetry-secret: <secret>`, body `{slug, stationKey}`. Response:
+   `{hostname, serverAddr, serverPort, authToken, proxyName, subdomain}`
+   (all required).
+3. `frpc.toml` shape mirrors `paperweightv1`'s own `buildFrpcToml` byte-for-
+   byte (`serverAddr`/`serverPort`/`auth.token`/one `[[proxies]]` block,
+   `type = "http"`, `localIP = "127.0.0.1"`).
+4. `stationKey` — a stable per-install identifier; mirrors
+   `paperweightv1`'s `pwinst_<32-hex>` generated-once install key.
+5. Default `PAPE_URL` = `https://system.paperweighthq.com` (matches
+   `paperweightv1`'s own `config.js` default) — hardcoded, no UI to change it.
+6. Supervisor behavior (regex-scan stdout/stderr for
+   `start proxy success|login to server success|work connection registered|proxy .* started`
+   to flag connected; exponential-backoff reconnect, base 2s × attempt,
+   max 5 attempts; SIGTERM-then-SIGKILL-after-2s stop) mirrors
+   `paperweightv1`'s own `src/runtime/frp-supervisor.js` line for line.
+
+**The `frpc` ARM64 binary bundling gap flagged as a real risk in the plan is
+NOT a gap — it's actually done.** This session fetched the official
+`fatedier/frp` `v0.71.0` release tarball
+(`github.com/fatedier/frp/releases/download/v0.71.0/frp_0.71.0_linux_arm64.tar.gz`,
+via `add_repo` + a direct HTTPS download that this session's proxy allowed),
+verified the extracted `frpc` binary really is
+`ELF 64-bit LSB executable, ARM aarch64, ... statically linked` (confirmed
+with `file`, not assumed), and placed it at
+`app/src/main/jniLibs/arm64-v8a/libfrpc.so` (jniLibs-convention path per plan
+decision #6, so Android's installer extracts it with the exec bit set).
+Its Apache-2.0 `LICENSE` is vendored alongside at
+`app/src/main/assets/licenses/frp-LICENSE.txt`. `AndroidManifest.xml` gained
+one new attribute, `android:extractNativeLibs="true"` on `<application>` —
+required so the binary is actually extracted to a real file
+(`context.applicationInfo.nativeLibraryDir`) that `ProcessBuilder` can exec,
+rather than left mmap'd inside the APK zip. **This is still unverified on a
+real device** — a statically-linked Go ELF binary built for generic Linux
+ARM64 *should* run under Android's Bionic-based userland (no glibc/dynamic-
+linker dependency), and that's the standard trick for bundling Go binaries
+as Android "native libraries," but nobody has actually run it on the A12 yet.
+Confirm `frpc --version` (or equivalent) actually executes from
+`nativeLibraryDir` as the very first Phase 9 device-validation step.
+
+New `reachability/` package:
+- `FrpRegistrationClient.kt` — the two POST calls above via the
+  previously-unused `okhttp-core` dependency + `kotlinx.serialization.json`.
+- `FrpcConfigWriter.kt` — writes `<filesDir>/tunnel/frpc.toml` (app-internal,
+  not the SD card — it's regenerable/secret-bearing, not backed up).
+- `FrpcProcessSupervisor.kt` — the `ProcessBuilder` supervisor described above.
+- `ReachabilityRepository.kt` — composes registration + config-write +
+  supervisor start behind `register(slug): Result<String>` /
+  `disconnect()` / `status: StateFlow<TunnelStatus>`.
+- `TunnelHealthCheckWorker.kt` — WorkManager periodic (~15 min) HEAD request
+  against the stored public URL; only updates
+  `StationProfileEntity.lastReachableAt` (new column, see below), does not
+  restart `frpc` (the supervisor already self-heals). Scheduled from
+  `ReachabilityRepository.register()` on first successful registration,
+  cancelled from `disconnect()`.
+- `ReachabilityModels.kt` — `FrpTunnelCredentials`, `TunnelStatus` (local
+  types, not `network/models` DTOs — that package is being wound down
+  file-by-file, no reason to add to it).
+
+**New secrets store**: `data/prefs/SecurePreferences.kt` — `EncryptedSharedPreferences`
+(the `androidx.security.crypto` dependency was declared since Phase 0 but
+unused until now) holding the per-install `stationKey`, the registration
+`secret`, and the frp `authToken`. Deliberately a separate file from
+`AppPreferences` so these can never accidentally flow into
+`AppPreferences.snapshotNonSecretConfig()` and round-trip through the
+automatic SD-card backup — the Keystore key backing it does not survive
+reinstall/factory reset. `AppPreferences` gained a plain (non-secret)
+`stationSlug` field instead, since the slug itself is just the public
+subdomain, not a credential — it's now part of `NonSecretConfig` and
+round-trips through normal backup/restore.
+
+**`RecoveryInfoExporter.kt` (Phase 3 placeholder) now has real content**: it
+reveals the registration secret and frp auth token on-screen (via Settings'
+existing "Show recovery info" button) once they exist, instead of the
+Phase 3 explanatory-only placeholder text.
+
+**Schema change — read before installing on the physical A12:**
+`StationProfileEntity` gained `lastReachableAt: Long?` and
+`AppDatabase.DATABASE_VERSION` was bumped **1 → 2**. Because v1 uses
+`fallbackToDestructiveMigration()` (an accepted v1-only shortcut per this
+file's Phase 1 notes), the **first app launch after installing this build
+will destroy the existing Room database** on Bud's physical A12 — including
+whatever vault tracks/schedule/token data is already there from Phase 2/3
+testing. **Back up first** (Settings → Back up now) if that data matters,
+then restore after reinstalling, or accept the loss if the device only has
+disposable test data on it right now. The exported Room schema for version 2
+(`app/schemas/com.paperweight.os.data.db.AppDatabase/2.json`) could not be
+generated in this session — KSP only writes it during a real
+`./gradlew` build, which this session couldn't run.
+
+**Station screen fully rewritten, not just trimmed.** The old Retrofit-era
+`StationScreen`/`StationViewModel`/`StationUiState` (Cloudflare tunnel setup,
+PaperweightHQ telemetry-secret paste, directory searchability toggle,
+setup-progress checklist, product-updates signup) is gone entirely — the
+Phase 9 build-order description in the plan only calls for "LAN URL, public
+frp-tunneled URL, QR codes, tunnel connection status," and nothing in that
+list needed any of the old surface, so it was replaced rather than patched.
+`network/models/StationModels.kt` is now **fully deleted** (confirmed nothing
+else imports it) rather than just trimmed of its Cloudflare-specific types —
+every type in that file was Retrofit-era station/telemetry/signup DTO shape
+with no place in the new design. New `ui/components/QrCode.kt` wraps
+`com.google.zxing:core` (declared since Phase 0 specifically for "QR
+generation only," unused until now) for the public-URL QR code.
+
+Settings screen gained a small read-only "Public reachability" panel (slug +
+tunnel status text) — registration/slug entry itself lives on Station, per
+the plan's file split.
+
+**Known real gaps, not yet exercised (all real-device-only):**
+1. Whether `frpc` actually executes from `nativeLibraryDir` on the A12 (see above).
+2. A real end-to-end register → create-tunnel round trip against the live
+   `system.paperweighthq.com` — this session could not reach it (no network
+   egress test attempted beyond fetching `paperweightv1`'s source and the
+   `frp` release binary; the actual registration API was never called).
+3. Whether the destructive Room migration above is acceptable or needs a
+   backup-first pass on the physical device.
+
 ## Key decisions made this session (don't re-litigate without reason)
 
 1. **`network/models/*.kt` DTOs are deliberately kept for now**, despite
@@ -742,7 +875,11 @@ others for now. Pick those up per the plan file when scoped.
 
 The frp registration contract open item for Phase 9 is now resolved — see the
 Phase 9 section below for what was read directly out of `bud-diaz/paperweightv1`
-and what got built from it.
+and what got built from it. Phase 9 still needs, in order, on Bud's machine:
+back up the physical A12's current Room DB (destructive migration — see Phase
+9 section), install this build, confirm `frpc` actually runs from
+`nativeLibraryDir`, then do a real register/create-tunnel round trip against
+`system.paperweighthq.com` with a real slug.
 
 ## Repo layout as of this handoff
 
