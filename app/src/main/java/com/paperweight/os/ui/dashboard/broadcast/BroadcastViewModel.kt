@@ -33,6 +33,7 @@ class BroadcastViewModel(application: Application) : AndroidViewModel(applicatio
                         nowPlayingTitle = broadcast.nowPlayingTitle,
                         nowPlayingArtist = broadcast.nowPlayingArtist,
                         liveActive = broadcast.isRunning,
+                        micLive = broadcast.isMicLive,
                         listenerCount = broadcast.listenerCount,
                         queue = broadcast.queue.mapIndexed { index, item ->
                             BroadcastQueueItem(id = index + 1, title = item.title, artist = item.artist)
@@ -49,6 +50,14 @@ class BroadcastViewModel(application: Application) : AndroidViewModel(applicatio
     fun toggleMode() = engine.toggleMode()
 
     fun restart() = engine.restart()
+
+    fun toggleMicLive() {
+        if (((_state.value as? ScreenState.Content)?.data?.micLive) == true) {
+            engine.stopLive()
+        } else {
+            engine.goLive()
+        }
+    }
 
     fun removeFromQueue(index: Int) = engine.removeFromQueue(index)
 

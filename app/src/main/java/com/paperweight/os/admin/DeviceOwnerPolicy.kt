@@ -1,5 +1,6 @@
 package com.paperweight.os.admin
 
+import android.Manifest
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -36,11 +37,20 @@ object DeviceOwnerPolicy {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             devicePolicyManager.setKeyguardDisabled(adminComponent, true)
-            // RECORD_AUDIO/POST_NOTIFICATIONS silent grants land alongside the
-            // broadcast engine (mic capture) and its foreground service in
-            // later phases, once those permissions are actually declared in
-            // the manifest — mirroring how the removed CAMERA grant used to
-            // work here for the QR pairing flow.
+            devicePolicyManager.setPermissionGrantState(
+                adminComponent,
+                context.packageName,
+                Manifest.permission.RECORD_AUDIO,
+                DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED,
+            )
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            devicePolicyManager.setPermissionGrantState(
+                adminComponent,
+                context.packageName,
+                Manifest.permission.POST_NOTIFICATIONS,
+                DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED,
+            )
         }
     }
 

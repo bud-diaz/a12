@@ -7,6 +7,7 @@ data class BroadcastUiState(
     val nowPlayingTitle: String? = null,
     val nowPlayingArtist: String? = null,
     val liveActive: Boolean = false,
+    val micLive: Boolean = false,
     val listenerCount: Int = 0,
     val queue: List<BroadcastQueueItem> = emptyList(),
     val actionMessage: String? = null,

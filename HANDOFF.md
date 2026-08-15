@@ -44,6 +44,220 @@ read the plan first.
 
 ## Latest validation update
 
+**Phase 6 listener-load follow-up:** After the HLS continuity patch, Bud reported
+the listener/player no longer loaded. Root cause was the connected-test/install
+cycle leaving the vault queue empty and no `live.m3u8`; the listener page loaded
+but HLS `/live/playlist.m3u8` returned 404, so the player appeared dead. Patch 5
+makes idle broadcast state publish a silent HLS window when there are no public
+tracks, so the listener/player can load before a validation tone or vault track is
+queued.
+
+**Phase 6 HLS continuity/choppy-mic follow-up:** Bud reported the listener stream
+cut out on `Go live` and only resumed after refreshing the page; the same happened
+when stopping live mic, and speech sounded choppy/skipping. Root cause was HLS
+continuity, not mic gain: `SegmentStore.writeEncodedSegments()` cleared HLS files
+and reused `segment-0.aac` / reset playlist sequence on each source write, while
+mic live published one short segment at a time with a stale 6s target duration.
+Patch 4 keeps monotonically increasing segment filenames across rotation → mic →
+rotation, keeps a rolling live playlist window, marks source switches with
+`#EXT-X-DISCONTINUITY`, avoids the one-segment intermediate playlist flash from
+engine writes, and computes `#EXT-X-TARGETDURATION` from the actual live window so
+1.5s mic windows reload promptly.
+
+**Phase 6 quieter-speech gate follow-up:** Bud's first ear-check after the
+CAMCORDER/noise-gate patch confirmed audible mic speech, but a second attempt cut
+over without audible speech. That points away from permissions/HLS cutover and
+toward the low-signal gate being too aggressive for normal speech distance/angle.
+Patch 3 lowers the digital-silence gate from `peak < 80` to `peak < 24` and adds
+a quieter-signal instrumented test so speech-like input is not gated to dead air.
+
+**Phase 6 white-noise follow-up:** Bud repeated the ear-check after the first gain
+patch and heard louder white noise, not speech. The initial normalization fix had
+only amplified the A12's low-level MIC noise. A controlled AudioRecord source
+probe using an on-device speaker tone showed `CAMCORDER` source captured materially
+more acoustic signal than plain `MIC`, while `MIC` stayed near the noise floor:
+
+```text
+MIC_MONO maxAbs≈16-18 rms≈4
+CAMCORDER_MONO maxAbs≈136-177 rms≈24-38
+UNPROCESSED_MONO maxAbs≈4 rms≈1.2
+VOICE_RECOGNITION_MONO maxAbs≈9-10 rms≈2
+VOICE_COMMUNICATION_MONO maxAbs≈8 rms≈2.4
+```
+
+Second patch applied:
+- `MicCapture` now uses `MediaRecorder.AudioSource.CAMCORDER` instead of `MIC`.
+- Keeps mono PCM16 and AGC.
+- Adds a low-signal noise gate (`peak < 24` -> digital silence) before bounded
+  normalization, so idle mic windows do not become amplified white noise while
+  quieter speech-like input is not gated to dead air.
+- Keeps 1.5s live-mic segments.
+- `Phase6RealMicSignalInstrumentedTest` now plays an on-device speaker tone and
+  verifies the conditioned real mic path produces an audible PCM level.
+
+Validation after second patch:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase6RealMicSignalInstrumentedTest
+# Starting 2 tests on SM-A125U - 11
+# Finished 2 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# BUILD SUCCESSFUL; :app:testDebugUnitTest NO-SOURCE
+
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase6MicGoLiveInstrumentedTest
+# Starting 2 tests on SM-A125U - 11
+# Finished 2 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 18 tests on SM-A125U - 11
+# Finished 18 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+```
+
+Installed and smoked after the second patch; tapping `Go live` regenerated
+`files/hls/live.m3u8` with a 1.486s live-mic segment (`segment-29.aac`, 24,251
+bytes). Bud still needs to repeat the human speech ear-check on this second
+patched build.
+
+**Phase 6 dead-space bug diagnosed and patched after Bud's ear-check.** Bud
+confirmed the stream cut over and resumed, but reported hearing dead space rather
+than his speech. Root-cause probe on the physical A12 showed permissions and
+recording sessions were active, but raw AudioRecord PCM amplitude was effectively
+silent despite successful HLS segment generation:
+
+```bash
+adb shell cmd appops get com.paperweight.os RECORD_AUDIO
+# RECORD_AUDIO: allow
+adb shell dumpsys package com.paperweight.os | grep -A3 -B2 RECORD_AUDIO
+# android.permission.RECORD_AUDIO: granted=true, flags=[ POLICY_FIXED]
+adb shell dumpsys audio | grep -Ei 'rec start|rec stop|com.paperweight'
+# rec start/stop src:MIC pack:com.paperweight.os
+
+# Temporary probe comparing AudioRecord sources/channel masks:
+# MIC_MONO maxAbs=19 rms=4.09
+# MIC_STEREO maxAbs=18 rms=4.51
+# VOICE_RECOGNITION_MONO maxAbs=9 rms=2.17
+# VOICE_COMMUNICATION_MONO maxAbs=8 rms=2.38
+```
+
+Fix applied:
+- `MicCapture` now uses mono `CHANNEL_IN_MONO` instead of stereo for the phone mic.
+- Enables `AutomaticGainControl` for the AudioRecord session when available.
+- Applies bounded PCM16 peak normalization before AAC encoding so the HLS mic
+  stream is not near-silent.
+- Shortens live-mic capture windows from 6s to 1.5s to reduce “speak now, hear it
+  a full segment later” latency.
+- Added `Phase6RealMicSignalInstrumentedTest` so the suite catches real-device
+  near-silent mic capture, not just fake-mic HLS wiring.
+
+Validation after the fix on `SM-A125U - 11`:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase6RealMicSignalInstrumentedTest
+# Starting 1 tests on SM-A125U - 11
+# Finished 1 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase6MicGoLiveInstrumentedTest
+# Starting 2 tests on SM-A125U - 11
+# Finished 2 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# BUILD SUCCESSFUL; :app:testDebugUnitTest NO-SOURCE
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 18 tests on SM-A125U - 11
+# Finished 18 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+```
+
+Installed/smoked after patch:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Success
+# Broadcast screen showed Go live.
+# After tapping Go live, app-private HLS output was regenerated:
+adb shell run-as com.paperweight.os ls -l files/hls
+# live.m3u8
+# segment-1.aac 24236 bytes
+adb shell run-as com.paperweight.os cat files/hls/live.m3u8
+# #EXT-X-MEDIA-SEQUENCE:1
+# #EXTINF:1.486,
+# segment-1.aac
+# mLockTaskModeState=LOCKED
+```
+
+Bud still needs to repeat the human ear-check against this patched build before
+Phase 6 can be called product-audible closed.
+
+**Phase 6 (Mic go-live) has started and is build-, instrumented-test-, and A12-smoke validated.**
+This pass added a real `MicCapture` AudioRecord wrapper, `BroadcastEngine.goLive()` /
+`stopLive()` source switching, `BroadcastState.isMicLive`, foreground-service
+microphone type toggling in `BroadcastService`, Device Owner silent grant for
+`RECORD_AUDIO`, and a `Go live` / `Stop live mic` control on the Broadcast screen.
+Mic input is captured in segment-sized PCM windows and fed through the existing
+AAC/HLS path, so the listener stream cuts over at an HLS segment boundary and
+returns to station rotation when toggled off.
+
+Real validation on `SM-A125U - 11`:
+
+```bash
+./gradlew :app:compileDebugKotlin :app:assembleDebugAndroidTest
+# BUILD SUCCESSFUL
+
+./gradlew :app:assembleDebug :app:testDebugUnitTest
+# BUILD SUCCESSFUL; :app:testDebugUnitTest NO-SOURCE
+# app-debug.apk 71,044,701 bytes
+# sha256 dff6708d949d987032dbeedbff9c0540731cf3591e7a9e376492b50afd69380a
+
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase6MicGoLiveInstrumentedTest
+# Starting 2 tests on SM-A125U - 11
+# Finished 2 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 17 tests on SM-A125U - 11
+# Finished 17 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+```
+
+Physical A12 smoke:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Success
+adb shell am start -n com.paperweight.os/.MainActivity
+# MainActivity resumed; mLockTaskModeState=LOCKED
+adb shell dumpsys package com.paperweight.os | grep -E 'RECORD_AUDIO|FOREGROUND_SERVICE_MICROPHONE'
+# RECORD_AUDIO requested and runtime permission granted=true, flags=[ POLICY_FIXED]
+# FOREGROUND_SERVICE_MICROPHONE requested
+```
+
+Broadcast screen UI showed `Go live`. Tapping it switched the UI to `Stop live
+mic`, visible now-playing became `Live from the A12 mic`, and the explanatory copy
+changed to `The A12 mic is feeding the same HLS stream...`. App-private HLS output
+from the real mic path was observed on-device:
+
+```bash
+adb shell run-as com.paperweight.os ls -l files/hls
+# live.m3u8
+# segment-0.aac 98013 bytes
+```
+
+`BroadcastService` remained foreground on channel `paperweight_broadcast`, and
+lock task remained `LOCKED`. Tapping `Stop live mic` returned the Broadcast screen
+to the `Go live` control.
+
 **Phase 5 LAN HLS playback blocker is patched and device-validated on the physical A12.**
 This session added an explicit debug-only `Generate Phase 5 validation tone` path:
 `DebugBuild` gates the UI to debuggable builds, `ValidationBroadcastSeeder`
@@ -827,6 +1041,73 @@ ear-check from another Wi-Fi device worked, so the previous technical
 `404`/playlist/playability blocker and the plan's audible LAN playback gate are
 resolved.
 
+**Phase 6 (Mic go-live) is code-complete and A12-smoke validated.** This pass
+kept the Phase 4/5 AAC/HLS path as the single stream path and added microphone as
+a temporary source override, not a second broadcast stack.
+
+New files / wiring:
+- `broadcast/mic/MicCapture.kt` — blocking AudioRecord capture for one
+  segment-sized PCM window at 44.1kHz stereo PCM16.
+- `BroadcastEngine.goLive()` / `stopLive()` — cancel normal rotation, capture mic
+  PCM windows, encode through `AacEncoder`, write/publish `<filesDir>/hls/`
+  segments via `SegmentStore`, and return to station rotation when toggled off.
+- `BroadcastState.isMicLive` — surfaced to server/service/UI state.
+- `BroadcastService` now observes `isMicLive` and re-calls
+  `ServiceCompat.startForeground(...)` with the microphone foreground-service
+  type while the mic is live.
+- Manifest now declares `RECORD_AUDIO` and `FOREGROUND_SERVICE_MICROPHONE`; the
+  broadcast service declares `foregroundServiceType="specialUse|microphone"`.
+- `DeviceOwnerPolicy` silently grants `RECORD_AUDIO` for Device Owner installs
+  and grants `POST_NOTIFICATIONS` only on Android 13+.
+- Broadcast screen now has a real `Go live` / `Stop live mic` control and disables
+  rotation/mode controls while the mic source override is active.
+
+Phase 6 validation on `SM-A125U - 11`:
+
+```bash
+./gradlew :app:compileDebugKotlin :app:assembleDebugAndroidTest
+# BUILD SUCCESSFUL
+
+./gradlew :app:assembleDebug :app:testDebugUnitTest
+# BUILD SUCCESSFUL; :app:testDebugUnitTest NO-SOURCE
+# app-debug.apk 71,044,701 bytes
+# sha256 dff6708d949d987032dbeedbff9c0540731cf3591e7a9e376492b50afd69380a
+
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase6MicGoLiveInstrumentedTest
+# Starting 2 tests on SM-A125U - 11
+# Finished 2 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 17 tests on SM-A125U - 11
+# Finished 17 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Success
+adb shell dumpsys package com.paperweight.os | grep -E 'RECORD_AUDIO|FOREGROUND_SERVICE_MICROPHONE'
+# RECORD_AUDIO requested and granted=true, flags=[ POLICY_FIXED]
+# FOREGROUND_SERVICE_MICROPHONE requested
+```
+
+Remote UI/device smoke after install:
+- Navigated to Broadcast on the physical A12; visible UI contained `Go live`,
+  `Station rotation`, and the Phase 5 debug validation-tone button.
+- Tapped `Go live`; visible UI changed to `Stop live mic`, `Live from the A12
+  mic`, and `The A12 mic is feeding the same HLS stream...`.
+- `BroadcastService` remained `isForeground=true` on channel
+  `paperweight_broadcast`.
+- HLS output existed under app-private storage from the real mic path:
+  `files/hls/live.m3u8` and `files/hls/segment-0.aac` (`98013` bytes).
+- `mLockTaskModeState=LOCKED` stayed true.
+- Tapped `Stop live mic`; UI returned to `Go live`.
+
+Manual-only boundary: this remote smoke proves the real A12 microphone path
+captures/encodes/publishes HLS and the UI toggles cleanly. It does not prove a
+human listener heard speech cut over and revert; run that ear-check from another
+Wi-Fi device before treating Phase 6 as product-audible closed.
+
 **Phase 9 (Reachability / frp tunnel) is code-complete but NOT build- or
 device-validated this session** (same remote-container caveat as Phase 5
 above — no `ANDROID_HOME`/SDK/`adb` here).
@@ -1126,46 +1407,36 @@ Phase 3 remaining real-device recovery validation:
    data/reinstall, grant/select the `Paperweight` folder, choose restore, and
    confirm vault metadata/config returns without re-ingesting media.
 
-**Phases 5, 9, and 11 are all code-complete this session but share one
-blocking gap: none of it has run through a real Kotlin compiler or on a real
-device yet.** This session ran entirely in a remote container with JDK 21 and
-no `ANDROID_HOME`/SDK/`adb` — every phase below was written and carefully
-self-reviewed, not built. Do this, in order, on Bud's machine before treating
-any of the three as closed:
+**Phase 6 remaining validation is the repeat human speech ear-check on the second patched mic-source build.**
+Bud confirmed the first build cut over/resumed but only produced dead space, then
+confirmed the first gain patch produced louder white noise. The current second
+patch uses CAMCORDER source, mono capture, AGC, a low-signal noise gate, bounded
+PCM normalization, and 1.5s live-mic segments; real-device speaker-tone/build
+tests pass. Before calling Phase 6 product-audible closed, use another Wi-Fi
+device/browser/VLC against the LAN listener/playlist while speaking into the A12,
+confirm speech is now audible instead of white noise, then tap `Stop live mic` and
+confirm station rotation resumes audibly.
 
-1. **Back up first.** Phase 9 bumped `AppDatabase` version 1→2
-   (`fallbackToDestructiveMigration()` will wipe the physical A12's existing
-   Room DB on first launch of this build). Run Settings → Back up now on the
-   *current* installed build before installing this one, if the existing
-   vault/schedule/token data on the device matters.
-2. `./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest` —
-   first real compile of all three phases' code. Fix whatever a real compiler
-   finds; nothing here has been machine-verified yet.
-3. `adb install -r` + smoke: confirm boot still reaches the dashboard,
-   `BroadcastService` still runs foreground, lockTask still holds.
-4. **Phase 5 check:** from a second device on the same Wi-Fi, open
-   `http://<lan-ip>:<port>/` in a browser (bundled hls.js listener page) and
-   `http://<lan-ip>:<port>/live/playlist.m3u8` in VLC — both should play
-   audio once a public vault track exists.
-5. **Phase 9 checks, in order:** confirm `frpc` actually executes from
-   `context.applicationInfo.nativeLibraryDir` (the jniLibs-bundled binary has
-   never been run — see the Phase 9 section above); then a real
-   register/create-tunnel round trip against `system.paperweighthq.com` with
-   a real slug from the Station screen; then confirm the public URL plays in
-   a browser from outside the LAN.
-6. **Phase 11 check:** open Earnings, confirm the "Coming soon" shell renders
-   with the correct priced-track count/range instead of the old revenue UI
-   or an error state.
-7. Run `./gradlew :app:connectedDebugAndroidTest` — no new instrumented tests
-   were added this session (none of the three phases had an obvious
-   device-only behavior worth a *new* test beyond what steps 3–6 already
-   exercise manually), so this just confirms nothing from Phases 0–4's
-   existing suite regressed.
+**Phase 9 and Phase 11 were previously code-complete; Phase 9 still has real-device/public-network gaps.**
+Phase 5 is closed and Phase 6 has now been compiler/device-smoke validated on
+Bud's machine. Remaining notable checks before treating the skipped-ahead work as
+fully closed:
 
-Phases 6, 7, 8, 10, and 12 (mic go-live, scheduling, access tokens,
-analytics/audience, final polish) were **not** touched this session — the
-user asked specifically for phases 5, 9, and 11, in that order, skipping the
-others for now. Pick those up per the plan file when scoped.
+1. **Phase 9 checks, in order:** confirm `frpc` actually executes from
+   `context.applicationInfo.nativeLibraryDir`; then run a real register/create-
+   tunnel round trip against `system.paperweighthq.com` with a real slug from the
+   Station screen; then confirm the public URL plays in a browser from outside
+   the LAN.
+2. **Phase 11 check:** open Earnings, confirm the `Coming soon` shell renders
+   with the correct priced-track count/range instead of the old revenue UI or an
+   error state.
+3. Keep running full `./gradlew :app:connectedDebugAndroidTest` after each phase
+   because the suite now includes Phase 6 and currently passes 17 tests on the
+   physical A12.
+
+Phases 7, 8, 10, and 12 (scheduling, access tokens, analytics/audience, final
+polish) are still untouched in the normal build order. Pick those up per the plan
+file after Phase 6's final listener ear-check.
 
 ## Repo layout as of this handoff
 
@@ -1195,8 +1466,9 @@ app/src/main/java/com/paperweight/os/
 │   ├── VaultFileStore.kt            // pure SAF copy into Paperweight/vault/
 │   └── VaultIngestor.kt             // tree-grant persist/check + ingest() orchestration
 ├── di/ServiceLocator.kt             // + embeddedHttpServer (Phase 5), + securePreferences/reachabilityRepository (Phase 9)
-├── broadcast/                       // Phase 4; BroadcastService now also owns the embedded server (Phase 5)
+├── broadcast/                       // Phase 4; embedded server (Phase 5), mic source override (Phase 6)
 │   ├── BroadcastEngine.kt / BroadcastService.kt / BroadcastState.kt
+│   ├── mic/MicCapture.kt
 │   ├── decode/TrackDecoder.kt
 │   ├── encode/AacEncoder.kt / AdtsHeaderWriter.kt
 │   └── hls/PlaylistWriter.kt / SegmentWriter.kt / SegmentStore.kt

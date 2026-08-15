@@ -51,10 +51,12 @@ fun BroadcastScreen(viewModel: BroadcastViewModel = viewModel()) {
                 ViewHeader(
                     eyebrow = "Signal / Broadcast",
                     title = if (data.liveActive) "The room is open." else "Your room, when you're ready.",
-                    description = if (data.liveActive) {
+                    description = if (data.micLive) {
+                        "The A12 mic is feeding the same HLS stream. Toggle off to return to the station rotation."
+                    } else if (data.liveActive) {
                         "Listeners are in the room. Keep making it feel like they found something."
                     } else {
-                        "Manage station rotation and the next tracks in line. Live mic streaming is still a later stretch pass."
+                        "Manage station rotation, queue state, and the live-mic cutover."
                     },
                     action = {
                         AssistChip(
@@ -71,6 +73,7 @@ fun BroadcastScreen(viewModel: BroadcastViewModel = viewModel()) {
                     data = data,
                     onToggleMode = viewModel::toggleMode,
                     onRestart = viewModel::restart,
+                    onToggleMicLive = viewModel::toggleMicLive,
                     onSeedValidationTone = viewModel::seedValidationTone,
                 )
             }
@@ -122,21 +125,40 @@ private fun RotationPanel(
     data: BroadcastUiState,
     onToggleMode: () -> Unit,
     onRestart: () -> Unit,
+    onToggleMicLive: () -> Unit,
     onSeedValidationTone: () -> Unit,
 ) {
     PanelCard(modifier = Modifier.fillMaxWidth()) {
         Text(text = "Station rotation", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         Text(text = data.mode.uppercase(), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 18.dp)) {
-            Button(onClick = onToggleMode, enabled = !data.actionInFlight, modifier = Modifier.weight(1f)) {
+            Button(onClick = onToggleMode, enabled = !data.actionInFlight && !data.micLive, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Outlined.Shuffle, contentDescription = null)
                 Text(text = "Switch to ${data.alternateMode}", modifier = Modifier.padding(start = 8.dp))
             }
-            OutlinedButton(onClick = onRestart, enabled = !data.actionInFlight, modifier = Modifier.weight(1f)) {
+            OutlinedButton(onClick = onRestart, enabled = !data.actionInFlight && !data.micLive, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Outlined.Refresh, contentDescription = null)
                 Text(text = "Restart", modifier = Modifier.padding(start = 8.dp))
             }
         }
+        Button(
+            onClick = onToggleMicLive,
+            enabled = !data.actionInFlight,
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        ) {
+            Icon(Icons.Outlined.Radio, contentDescription = null)
+            Text(text = if (data.micLive) "Stop live mic" else "Go live", modifier = Modifier.padding(start = 8.dp))
+        }
+        Text(
+            text = if (data.micLive) {
+                "Live mic is active. Toggle off to return to station rotation at the next segment boundary."
+            } else {
+                "Cuts the stream to the A12 microphone using the same AAC/HLS output path."
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
         if (data.validationToneAvailable && data.queue.isEmpty()) {
             OutlinedButton(
                 onClick = onSeedValidationTone,

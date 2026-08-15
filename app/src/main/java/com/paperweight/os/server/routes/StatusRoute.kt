@@ -13,6 +13,7 @@ class StatusRoute(private val broadcastEngine: BroadcastEngine) {
         val body = Json.encodeToString(
             StatusPayload(
                 isRunning = state.isRunning,
+                isMicLive = state.isMicLive,
                 nowPlayingTitle = state.nowPlayingTitle,
                 nowPlayingArtist = state.nowPlayingArtist,
                 elapsedMs = state.elapsedMs,
@@ -29,6 +30,7 @@ class StatusRoute(private val broadcastEngine: BroadcastEngine) {
     @Serializable
     private data class StatusPayload(
         val isRunning: Boolean,
+        val isMicLive: Boolean,
         val nowPlayingTitle: String?,
         val nowPlayingArtist: String?,
         val elapsedMs: Long,

@@ -6,6 +6,7 @@ data class HlsSegment(
     val sequence: Long,
     val fileName: String,
     val durationSeconds: Double,
+    val discontinuity: Boolean = false,
 )
 
 object PlaylistWriter {
@@ -25,6 +26,7 @@ object PlaylistWriter {
             appendLine("#EXT-X-TARGETDURATION:$targetDurationSeconds")
             appendLine("#EXT-X-MEDIA-SEQUENCE:$mediaSequence")
             segments.forEach { segment ->
+                if (segment.discontinuity) appendLine("#EXT-X-DISCONTINUITY")
                 appendLine("#EXTINF:${"%.3f".format(segment.durationSeconds)},")
                 appendLine(segment.fileName)
             }

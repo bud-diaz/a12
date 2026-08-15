@@ -9,6 +9,7 @@ data class BroadcastQueueTrack(
 data class BroadcastState(
     val isRunning: Boolean = false,
     val mode: String = "shuffle",
+    val isMicLive: Boolean = false,
     val nowPlayingTrackId: String? = null,
     val nowPlayingTitle: String? = null,
     val nowPlayingArtist: String? = null,

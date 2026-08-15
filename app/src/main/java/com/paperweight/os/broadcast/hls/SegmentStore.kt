@@ -23,13 +23,17 @@ class SegmentStore(private val outputDir: File) {
         encodedAudio: EncodedAacAudio,
         startSequence: Long = 0,
         targetDurationSeconds: Int = SegmentWriter.DEFAULT_SEGMENT_SECONDS,
+        clearExisting: Boolean = true,
+        discontinuityOnFirstSegment: Boolean = false,
+        publishImmediately: Boolean = true,
     ): List<HlsSegment> {
-        clearHlsFiles()
+        if (clearExisting) clearHlsFiles()
         File(outputDir, "init.aac").writeBytes(ByteArray(0))
         val segments = mutableListOf<HlsSegment>()
         var sequence = startSequence
         var currentDurationUs = 0L
         var segmentBytes = ByteArrayOutputStream()
+        var firstSegment = true
 
         fun flushSegment() {
             if (segmentBytes.size() == 0) return
@@ -39,7 +43,9 @@ class SegmentStore(private val outputDir: File) {
                 sequence = sequence,
                 fileName = fileName,
                 durationSeconds = currentDurationUs / 1_000_000.0,
+                discontinuity = discontinuityOnFirstSegment && firstSegment,
             )
+            firstSegment = false
             sequence += 1
             currentDurationUs = 0L
             segmentBytes = ByteArrayOutputStream()
@@ -62,10 +68,11 @@ class SegmentStore(private val outputDir: File) {
                     sequence = startSequence,
                     fileName = fileName,
                     durationSeconds = ceil(encodedAudio.durationUs / 1000.0) / 1000.0,
+                    discontinuity = discontinuityOnFirstSegment,
                 ),
             )
         }
-        publishLiveWindow(written, currentIndex = 0, targetDurationSeconds = targetDurationSeconds)
+        if (publishImmediately) publishLiveWindow(written, currentIndex = 0, targetDurationSeconds = targetDurationSeconds)
         return written
     }
 
