@@ -12,8 +12,11 @@ data class BroadcastState(
     val nowPlayingTrackId: String? = null,
     val nowPlayingTitle: String? = null,
     val nowPlayingArtist: String? = null,
+    val elapsedMs: Long = 0,
+    val durationMs: Long = 0,
     val listenerCount: Int = 0,
     val queue: List<BroadcastQueueTrack> = emptyList(),
     val playlistPath: String? = null,
+    val segmentCount: Int = 0,
     val actionMessage: String? = null,
 )

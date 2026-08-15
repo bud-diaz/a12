@@ -1,6 +1,8 @@
 package com.paperweight.os.broadcast
 
 object AdtsHeaderWriter {
+    const val ADTS_HEADER_LENGTH = 7
+
     private val SAMPLE_RATE_INDEX = mapOf(
         96_000 to 0,
         88_200 to 1,

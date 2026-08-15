@@ -9,12 +9,9 @@ up, only this repo.
 
 ## Read first
 
-- `/home/user/a12/CLAUDE.md` — project constraints. Note: CLAUDE.md's
-  "Station pairing flow" section still describes the *old* architecture
-  (pair against an existing Paperweight Studio dashboard). That description
-  is superseded by this pivot but CLAUDE.md itself hasn't been rewritten yet
-  — treat this HANDOFF.md and the plan file referenced below as the current
-  source of truth for the architecture until CLAUDE.md is updated.
+- `/home/user/a12/CLAUDE.md` — project constraints and current on-device backend
+  architecture. It has been rewritten after the pivot; it no longer describes the
+  old QR-pairing/remote-dashboard architecture as current scope.
 - The approved plan for this pivot: `docs/ON_DEVICE_BACKEND_PLAN.md` — has
   the full scope table, technical decisions, package layout, file fates,
   and the 12-phase build order. Read it before starting any phase.
@@ -257,46 +254,53 @@ adb shell am start -n com.paperweight.os/.MainActivity
 # Tapping Start fresh continued to the dashboard; mLockTaskModeState=LOCKED.
 ```
 
-**Phase 4 (Broadcast engine core) has started.** This pass added the first local
-broadcast engine scaffold, foreground service, HLS writer primitives, and
-Overview/Broadcast screen rewiring. The engine now observes local public vault
-tracks, publishes a `BroadcastState`, writes an initial packed-audio HLS window
-(`init.aac`, `segment-*.aac`, `live.m3u8`) via `SegmentStore`/`PlaylistWriter`,
-and starts as a foreground service once the restore gate has completed and the
-dashboard is allowed to open. The current segment payload is a silent AAC/ADTS
-heartbeat scaffold for the engine/service/playlist path; full source-track
-decode-to-AAC audio rotation still needs to replace that scaffold before LAN
-playback can be called product-complete.
+**Phase 4 (Broadcast engine core) is code-complete and verified on the physical
+A12.** This pass replaced the silent AAC/ADTS heartbeat scaffold with a real
+source-track path: SAF/file vault URI -> `MediaExtractor`/decoder `MediaCodec` ->
+PCM -> AAC-LC encoder `MediaCodec` -> ADTS-framed packed-audio HLS segments ->
+atomic `live.m3u8` live-window updates. `BroadcastEngine` now filters public vault
+tracks, encodes real audio segments, publishes current track/elapsed/duration and
+queue state, rotates through public tracks continuously, and keeps
+`BroadcastService` as a sticky foreground service once the restore gate has
+completed and the dashboard opens.
+
+`CLAUDE.md` was also rewritten to match the on-device-backend pivot so future
+sessions do not resurrect the old QR-pairing/remote-backend architecture.
 
 Phase 4 validation on `SM-A125U - 11`:
 
 ```bash
-./gradlew :app:connectedDebugAndroidTest \
+./gradlew :app:compileDebugKotlin :app:connectedDebugAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase4BroadcastEngineInstrumentedTest
-# Starting 3 tests on SM-A125U - 11
-# Finished 3 tests on SM-A125U - 11
+# Starting 5 tests on SM-A125U - 11
+# Finished 5 tests on SM-A125U - 11
 # BUILD SUCCESSFUL
 
-./gradlew :app:compileDebugKotlin assembleDebug :app:testDebugUnitTest :app:connectedDebugAndroidTest
-# Starting 12 tests on SM-A125U - 11
-# Finished 12 tests on SM-A125U - 11
+./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest :app:connectedDebugAndroidTest
+# Starting 14 tests on SM-A125U - 11
+# Finished 14 tests on SM-A125U - 11
 # BUILD SUCCESSFUL; testDebugUnitTest NO-SOURCE
 ```
 
+The Phase 4 instrumented tests now verify ADTS headers, packed-audio playlist
+writing, AAC encoding of non-silent PCM, real encoded HLS segment writing, public-
+only queue selection, now-playing publication, and generation of real track-audio
+segments from a generated WAV fixture on the physical A12.
+
 On-device smoke after install confirmed `MainActivity` resumed into the Overview
 screen, `BroadcastService` was running foreground with notification channel
-`paperweight_broadcast`, and lockTask remained locked:
+`paperweight_broadcast`, and lockTask remained locked after wake/dismiss-keyguard:
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
 adb shell am start -n com.paperweight.os/.MainActivity
-adb shell dumpsys activity services com.paperweight.os | grep BroadcastService
+adb shell dumpsys activity services com.paperweight.os
 # ServiceRecord ... com.paperweight.os/.broadcast.BroadcastService
-# isForeground=true foregroundId=404
-adb shell dumpsys notification --noredact | grep -A4 'Paperweight broadcast'
-# android.title=Paperweight broadcast
+# isForeground=true foregroundId=404 foregroundNoti=Notification(channel=paperweight_broadcast ...)
 adb shell dumpsys activity activities | grep mLockTaskModeState
 # mLockTaskModeState=LOCKED
+stat -c '%s' app/build/outputs/apk/debug/app-debug.apk
+# 65015000
 ```
 
 ## Status: what's built (Phase 0)
@@ -503,21 +507,25 @@ adb shell dumpsys activity activities | grep mLockTaskModeState
 
 ## Status: what's built (Phase 4)
 
-- **New `broadcast/` package scaffold**:
-  - `BroadcastState.kt` defines local `BroadcastState` and `BroadcastQueueTrack`.
+- **`broadcast/` package completed for Phase 4**:
+  - `BroadcastState.kt` defines local `BroadcastState`/`BroadcastQueueTrack`, now
+    including elapsed/duration, playlist path, and segment-count state for real
+    playback progress.
   - `BroadcastEngine.kt` observes local vault tracks, filters to public tracks,
-    publishes now-playing/queue state, supports mode toggle/restart/remove, and
-    writes an initial HLS window when public tracks are available.
+    decodes/encodes the current track into packed-audio HLS segments, publishes
+    live playlist windows over time, rotates continuously through the public
+    queue, and supports mode toggle/restart/remove.
   - `BroadcastService.kt` starts the engine as a sticky foreground service with
     notification channel `paperweight_broadcast`.
-  - `encode/AdtsHeaderWriter.kt` writes/parses AAC-LC ADTS headers;
-    `encode/AacEncoder.kt` currently provides the silent AAC/ADTS heartbeat
-    payload used by the initial HLS scaffold.
+  - `decode/TrackDecoder.kt` uses `MediaExtractor` to find the audio track and
+    either reads raw PCM directly or decodes compressed audio through decoder
+    `MediaCodec` into PCM.
+  - `encode/AacEncoder.kt` now uses encoder `MediaCodec` for AAC-LC output and
+    wraps each output frame with an ADTS header via `AdtsHeaderWriter`; the old
+    silent-frame helper remains only as a fallback/test fixture.
   - `hls/PlaylistWriter.kt`, `hls/SegmentWriter.kt`, and `hls/SegmentStore.kt`
-    write packed-audio segment files and an atomic `live.m3u8` playlist.
-  - `decode/TrackDecoder.kt` can inspect an audio URI via `MediaExtractor` and
-    confirm basic track duration/mime metadata, but full source decode into the
-    encoder is still the main unfinished Phase 4 item.
+    write packed-audio `.aac` segment files and atomically update `live.m3u8`
+    with a sliding live window.
 - **Manifest/service changes**: added foreground-service/network/wake/notification
   permissions needed for the always-on broadcast service and declared
   `.broadcast.BroadcastService` with `foregroundServiceType="specialUse"` and
@@ -530,11 +538,12 @@ adb shell dumpsys activity activities | grep mLockTaskModeState
   and `OverviewViewModel` now collect the local `BroadcastEngine.state` and render
   real Content state. With no public vault tracks, Overview shows zero catalog /
   nothing queued instead of the old "not wired" error.
-- **New instrumented tests**:
+- **Phase 4 instrumented tests expanded**:
   `app/src/androidTest/java/com/paperweight/os/broadcast/Phase4BroadcastEngineInstrumentedTest.kt`
-  verifies ADTS header construction, HLS playlist writing, public-only queue
-  selection, now-playing publication, and initial HLS file creation on the
-  physical A12.
+  verifies ADTS header construction, HLS playlist writing, non-silent PCM -> AAC
+  encoding, real encoded segment writing, public-only queue selection, now-playing
+  publication, and real generated-WAV audio segment generation on the physical
+  A12.
 
 ## Key decisions made this session (don't re-litigate without reason)
 
@@ -651,15 +660,10 @@ Phase 3 remaining real-device recovery validation:
    data/reinstall, grant/select the `Paperweight` folder, choose restore, and
    confirm vault metadata/config returns without re-ingesting media.
 
-Phase 4 remaining work before moving to Phase 5:
-1. Replace the silent AAC/ADTS heartbeat scaffold with true source-track decode
-   (`MediaExtractor`/`MediaCodec`) feeding AAC encoding and segment rotation from
-   the copied vault file URIs.
-2. Validate with a real ingested audio track that `live.m3u8` + segments are
-   playable locally before relying on Phase 5's NanoHTTPD/LAN player.
-3. Improve Broadcast/Overview metrics once the engine is playing real tracks
-   continuously (elapsed/queue/current-track state instead of the current minimal
-   now-playing scaffold).
+Phase 4 is closed for the local broadcast-engine core. Remaining playback work is
+Phase 5 scope: serve the generated `live.m3u8`/`.aac` files over NanoHTTPD with
+Range support, add the bundled listener player, and do the LAN/VLC/browser
+playback validation from another device on the same Wi-Fi.
 
 Phases 5–12 per the plan file, once Phase 4 is complete:
 1. **Phase 5 — Embedded server + listener player**: NanoHTTPD routes with Range
