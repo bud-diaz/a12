@@ -44,14 +44,14 @@ read the plan first.
 
 ## Latest validation update
 
-**Phase 6 human speech ear-check passed; product-audible closed.** Bud repeated
-the LAN listener ear-check against the mic-source/HLS-continuity patched build
-(CAMCORDER source, mono AGC, tuned noise gate, monotonic segment/playlist
-continuity, idle silent-window fallback) and confirmed the test was green —
-speech is audible over the listener stream on `Go live`, resolving the prior
-dead-space and white-noise regressions. Phase 6 mic go-live is now considered
-product-audible closed pending only the `Stop live mic` rotation-resume spot
-check noted below.
+**Phase 6 fully closed: human speech ear-check and rotation-resume spot check
+both passed.** Bud repeated the LAN listener ear-check against the
+mic-source/HLS-continuity patched build (CAMCORDER source, mono AGC, tuned
+noise gate, monotonic segment/playlist continuity, idle silent-window fallback)
+and confirmed speech is audible over the listener stream on `Go live`,
+resolving the prior dead-space and white-noise regressions. Bud then tapped
+`Stop live mic` and confirmed station rotation resumes audibly. Phase 6 mic
+go-live is now product-audible closed with no outstanding ear-check items.
 
 **Phase 6 listener-load follow-up:** After the HLS continuity patch, Bud reported
 the listener/player no longer loaded. Root cause was the connected-test/install
@@ -1416,13 +1416,12 @@ Phase 3 remaining real-device recovery validation:
    data/reinstall, grant/select the `Paperweight` folder, choose restore, and
    confirm vault metadata/config returns without re-ingesting media.
 
-**Phase 6 human speech ear-check is confirmed green; only the rotation-resume spot check remains.**
-Bud confirmed the first build cut over/resumed but only produced dead space, then
-confirmed the first gain patch produced louder white noise, then confirmed the
-second patched build (CAMCORDER source, mono capture, AGC, tuned noise gate,
-bounded PCM normalization, 1.5s live-mic segments, HLS continuity fixes) is
-audible over the LAN listener. Remaining: tap `Stop live mic` and confirm station
-rotation resumes audibly (not yet explicitly re-confirmed on this exact build).
+**Phase 6 has no remaining ear-check items.** Bud confirmed the first build cut
+over/resumed but only produced dead space, then confirmed the first gain patch
+produced louder white noise, then confirmed the second patched build (CAMCORDER
+source, mono capture, AGC, tuned noise gate, bounded PCM normalization, 1.5s
+live-mic segments, HLS continuity fixes) is audible over the LAN listener, and
+confirmed `Stop live mic` resumes station rotation audibly.
 
 **Phase 9 and Phase 11 were previously code-complete; Phase 9 still has real-device/public-network gaps.**
 Phase 5 is closed and Phase 6 has now been compiler/device-smoke validated on
