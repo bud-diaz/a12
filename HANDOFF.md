@@ -111,10 +111,10 @@ ffprobe -hide_banner -v error -show_entries stream=codec_name,codec_type,sample_
 The service/listener checks also showed `BroadcastService isForeground=true`,
 `LISTEN *:8080`, `mLockTaskModeState=LOCKED`, and `ResumedActivity` still
 `com.paperweight.os/.MainActivity`. This validates the A12 LAN HLS endpoint as a
-real playable AAC stream from a LAN client. Bud should still do the final human
-ear-check by pressing Play at `http://10.0.0.145:8080/` or opening
-`http://10.0.0.145:8080/live/playlist.m3u8` in VLC from another Wi-Fi device,
-but the previous `404` blocker is resolved.
+real playable AAC stream from a LAN client. Bud then performed the final human
+ear-check from another Wi-Fi listener device/browser/VLC path and confirmed that
+playback worked. The previous `404` blocker is resolved and Phase 5's LAN
+playback gate is fully closed.
 
 **Android Settings kiosk exception + nav button validated on the physical A12.**
 Current session changed `DeviceOwnerPolicy` to keep Android Settings explicitly
@@ -822,9 +822,10 @@ as AAC stereo 44.1kHz.
 
 Device/runtime checks also showed `BroadcastService isForeground=true`,
 `LISTEN *:8080`, `mLockTaskModeState=LOCKED`, and `ResumedActivity` still
-`com.paperweight.os/.MainActivity`. The remaining manual-only check is Bud's
-human ear-check from another Wi-Fi device via the listener page or VLC, but the
-previous technical `404`/playlist/playability blocker is resolved.
+`com.paperweight.os/.MainActivity`. Bud subsequently confirmed the manual human
+ear-check from another Wi-Fi device worked, so the previous technical
+`404`/playlist/playability blocker and the plan's audible LAN playback gate are
+resolved.
 
 **Phase 9 (Reachability / frp tunnel) is code-complete but NOT build- or
 device-validated this session** (same remote-container caveat as Phase 5
