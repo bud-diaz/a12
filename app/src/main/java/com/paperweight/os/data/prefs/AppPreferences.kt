@@ -24,12 +24,19 @@ class AppPreferences private constructor(private val sharedPreferences: SharedPr
     // plain (non-encrypted) prefs alongside the other non-secret config.
     val vaultTreeUri: Flow<String?> = stringFlow(KEY_VAULT_TREE_URI, "").map { it.ifEmpty { null } }
 
+    // The operator-chosen frp station slug (Phase 9). Not secret — it's the
+    // public *.paperweighthq.com subdomain, not a credential — so it lives
+    // here and round-trips through the normal backup, unlike the frp auth
+    // token/registration secret in SecurePreferences.
+    val stationSlug: Flow<String?> = stringFlow(KEY_STATION_SLUG, "").map { it.ifEmpty { null } }
+
     fun setStationName(value: String) = sharedPreferences.edit().putString(KEY_STATION_NAME, value).apply()
     fun setServerPort(value: Int) = sharedPreferences.edit().putInt(KEY_SERVER_PORT, value).apply()
     fun setBackupRetentionCount(value: Int) = sharedPreferences.edit().putInt(KEY_BACKUP_RETENTION_COUNT, value).apply()
     fun setBackupIntervalHours(value: Int) = sharedPreferences.edit().putInt(KEY_BACKUP_INTERVAL_HOURS, value).apply()
     fun setInitialRestoreDecisionMade(value: Boolean) = sharedPreferences.edit().putBoolean(KEY_INITIAL_RESTORE_DECISION_MADE, value).apply()
     fun setVaultTreeUri(value: Uri?) = sharedPreferences.edit().putString(KEY_VAULT_TREE_URI, value?.toString() ?: "").apply()
+    fun setStationSlug(value: String?) = sharedPreferences.edit().putString(KEY_STATION_SLUG, value ?: "").apply()
 
     suspend fun snapshotNonSecretConfig(): NonSecretConfig = NonSecretConfig(
         stationName = stationName.first(),
@@ -37,6 +44,7 @@ class AppPreferences private constructor(private val sharedPreferences: SharedPr
         backupRetentionCount = backupRetentionCount.first(),
         backupIntervalHours = backupIntervalHours.first(),
         vaultTreeUri = vaultTreeUri.first(),
+        stationSlug = stationSlug.first(),
     )
 
     fun restoreNonSecretConfig(config: NonSecretConfig) {
@@ -46,6 +54,7 @@ class AppPreferences private constructor(private val sharedPreferences: SharedPr
             .putInt(KEY_BACKUP_RETENTION_COUNT, config.backupRetentionCount)
             .putInt(KEY_BACKUP_INTERVAL_HOURS, config.backupIntervalHours)
             .putString(KEY_VAULT_TREE_URI, config.vaultTreeUri ?: "")
+            .putString(KEY_STATION_SLUG, config.stationSlug ?: "")
             .apply()
     }
 
@@ -81,6 +90,7 @@ class AppPreferences private constructor(private val sharedPreferences: SharedPr
         private const val KEY_BACKUP_INTERVAL_HOURS = "backup_interval_hours"
         private const val KEY_INITIAL_RESTORE_DECISION_MADE = "initial_restore_decision_made"
         private const val KEY_VAULT_TREE_URI = "vault_tree_uri"
+        private const val KEY_STATION_SLUG = "station_slug"
         const val DEFAULT_STATION_NAME = "Paperweight Station"
         const val DEFAULT_SERVER_PORT = 8080
         const val DEFAULT_BACKUP_RETENTION_COUNT = 7
@@ -99,4 +109,5 @@ data class NonSecretConfig(
     val backupRetentionCount: Int = AppPreferences.DEFAULT_BACKUP_RETENTION_COUNT,
     val backupIntervalHours: Int = AppPreferences.DEFAULT_BACKUP_INTERVAL_HOURS,
     val vaultTreeUri: String? = null,
+    val stationSlug: String? = null,
 )

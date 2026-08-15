@@ -48,6 +48,29 @@ fun SettingsScreen(viewModel: SettingsViewModel = viewModel()) {
             }
             item {
                 PanelCard(modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "Public reachability", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = "Slug: ${data.stationSlug ?: "not set"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Text(
+                        text = "Tunnel: ${data.tunnelStatusText}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    Text(
+                        text = "Registration and slug entry live on the Station screen.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            }
+            item {
+                PanelCard(modifier = Modifier.fillMaxWidth()) {
                     Text(text = "Backup target", style = MaterialTheme.typography.titleMedium)
                     Text(
                         text = if (data.vaultTreeGranted) {

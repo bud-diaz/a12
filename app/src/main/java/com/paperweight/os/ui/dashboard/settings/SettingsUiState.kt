@@ -6,6 +6,8 @@ data class SettingsUiState(
     val backupRetentionCount: Int = 7,
     val backupIntervalHours: Int = 24,
     val vaultTreeGranted: Boolean = false,
+    val stationSlug: String? = null,
+    val tunnelStatusText: String = "Not registered",
     val lastBackupName: String? = null,
     val recoveryInfo: String? = null,
     val actionMessage: String? = null,

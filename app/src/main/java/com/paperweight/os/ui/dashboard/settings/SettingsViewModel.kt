@@ -10,6 +10,7 @@ import com.paperweight.os.backup.BackupScheduler
 import com.paperweight.os.backup.BackupWriter
 import com.paperweight.os.backup.RecoveryInfoExporter
 import com.paperweight.os.di.ServiceLocator
+import com.paperweight.os.reachability.TunnelStatus
 import com.paperweight.os.ui.components.ScreenState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,20 +32,30 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun load() {
         viewModelScope.launch {
-            combine(
+            val prefsSnapshot = combine(
                 preferences.stationName,
                 preferences.serverPort,
                 preferences.backupRetentionCount,
                 preferences.backupIntervalHours,
                 preferences.vaultTreeUri,
             ) { stationName, serverPort, retention, interval, treeUri ->
+                PrefsSnapshot(stationName, serverPort, retention, interval, treeUri)
+            }
+            val reachabilitySnapshot = combine(
+                preferences.stationSlug,
+                services.reachabilityRepository.status,
+            ) { slug, status -> slug to status }
+
+            prefsSnapshot.combine(reachabilitySnapshot) { prefs, (slug, status) ->
                 val current = (_state.value as? ScreenState.Content)?.data
                 SettingsUiState(
-                    stationName = stationName,
-                    serverPort = serverPort,
-                    backupRetentionCount = retention,
-                    backupIntervalHours = interval,
-                    vaultTreeGranted = treeUri != null,
+                    stationName = prefs.stationName,
+                    serverPort = prefs.serverPort,
+                    backupRetentionCount = prefs.retention,
+                    backupIntervalHours = prefs.interval,
+                    vaultTreeGranted = prefs.treeUri != null,
+                    stationSlug = slug,
+                    tunnelStatusText = tunnelStatusText(status),
                     lastBackupName = current?.lastBackupName,
                     recoveryInfo = current?.recoveryInfo,
                     actionMessage = current?.actionMessage,
@@ -53,6 +64,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             }.collect { _state.value = ScreenState.Content(it) }
         }
     }
+
+    private fun tunnelStatusText(status: TunnelStatus): String = when (status) {
+        is TunnelStatus.Stopped -> "Not connected"
+        is TunnelStatus.Connecting -> "Connecting…"
+        is TunnelStatus.Connected -> "Connected"
+        is TunnelStatus.Error -> "Error: ${status.message}"
+    }
+
+    private data class PrefsSnapshot(
+        val stationName: String,
+        val serverPort: Int,
+        val retention: Int,
+        val interval: Int,
+        val treeUri: String?,
+    )
 
     fun saveBackupSettings(retentionCount: Int, intervalHours: Int) {
         preferences.setBackupRetentionCount(retentionCount.coerceAtLeast(1))
@@ -82,7 +108,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun showRecoveryInfo() {
-        mutate { copy(recoveryInfo = RecoveryInfoExporter.message(), actionMessage = "Recovery info displayed.") }
+        mutate { copy(recoveryInfo = RecoveryInfoExporter.message(services.securePreferences), actionMessage = "Recovery info displayed.") }
     }
 
     fun notify(message: String) {

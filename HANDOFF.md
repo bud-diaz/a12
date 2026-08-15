@@ -545,6 +545,250 @@ stat -c '%s' app/build/outputs/apk/debug/app-debug.apk
   publication, and real generated-WAV audio segment generation on the physical
   A12.
 
+**Phase 5 (Embedded server + listener player) is code-complete but NOT build- or
+device-validated this session.** This pass was done from a remote Claude Code
+session/container that has JDK 21 but no `ANDROID_HOME`, no Android SDK, and no
+`adb` — `./gradlew` could not be invoked and no physical device was reachable.
+Per this file's/CLAUDE.md's "no fake success" rule, treat everything below as
+code-complete-and-self-reviewed only, not verified, until run on Bud's local
+machine (`JAVA_HOME=.../jdk-17` + `ANDROID_HOME=.../Sdk` + connected `SM-A125U`).
+
+New `server/` package:
+- `EmbeddedHttpServer.kt` — extends NanoHTTPD (already a Gradle dependency
+  since Phase 0/1, unused until now), binds `0.0.0.0:<AppPreferences.serverPort>`
+  (read once at construction — a port change needs a `BroadcastService` restart
+  to take effect, same "restart required" shape `paperweightv1`'s own dashboard
+  API uses for equivalent config changes). Routes by URI prefix to the handlers
+  below.
+- `routes/PlaylistRoute.kt` — serves `<filesDir>/hls/live.m3u8` (the file
+  `PlaylistWriter`/`SegmentStore` already atomically rewrite every rotation
+  tick) as `application/vnd.apple.mpegurl`, never cached.
+- `routes/SegmentRoute.kt` — serves `init.aac`/`segment-<n>.aac` from the same
+  `<filesDir>/hls/` directory as `audio/aac`, cacheable (segments are
+  immutable once written). The requested filename is validated against an
+  exact `(init|segment-\d+)\.aac` pattern before touching the filesystem —
+  the only thing between an inbound LAN request and path traversal.
+- `routes/StatusRoute.kt` — small JSON (`isRunning`, now-playing title/artist,
+  elapsed/duration, listener/queue counts) read straight from
+  `BroadcastEngine.state.value`, polled by the listener page.
+- `routes/ListenerWebRoute.kt` — serves the vendored static assets below out
+  of `assets/listener/` via `context.assets.open(...)`.
+- `RangeResponse.kt` — shared `Range:` header parsing → HTTP 206 partial
+  responses, used by both the playlist and segment routes.
+- Route map: live manifest at `/live/playlist.m3u8`, segments at
+  `/live/<filename>`, status at `/status`, listener page at `/`.
+- Deliberately **not built**: `VaultVodRoute` (private-track VOD gating is
+  Phase 8 scope, not built) and `TelemetryRoute` (Phase 9/10 scope) — same
+  per-phase-only discipline as every prior phase.
+
+New `app/src/main/assets/listener/` (vendored, no CDN references, per plan
+decision #2's "vendored, not CDN" requirement):
+- `index.html`/`styles.css`/`player.js` — hand-written, minimal audio-only
+  listener page. `player.js` uses `Hls.isSupported()` → hls.js path, falls
+  back to native `<audio>` HLS for Safari/iOS, polls `/status` every 5s for
+  the "now playing" line.
+- `hls.min.js` (+ `hls.min.js.LICENSE.txt`) — actual hls.js **1.6.16** UMD
+  minified build, fetched from the real npm registry tarball
+  (`registry.npmjs.org/hls.js/-/hls.js-1.6.16.tgz`) during this session and
+  vendored as a static asset. Version chosen to match `paperweightv1`'s own
+  `package.json` pin (`"hls.js": "^1.6.16"`) rather than picking an arbitrary
+  version, so behavior parity with the existing product is intentional.
+
+Wiring:
+- `ServiceLocator.kt` gained `embeddedHttpServer`, composed from
+  `appContext` + `appPreferences` + the existing `broadcastEngine`.
+- `BroadcastService.kt` now starts `embeddedHttpServer.startServer()`
+  alongside the existing `broadcastEngine.start()` in both `onCreate()` and
+  `onStartCommand()`, and gained an `onDestroy()` override (didn't exist
+  before) that stops the server and cancels a new internal `serviceScope`.
+- After starting, the service resolves the device's current LAN IPv4 via a
+  new `server/LanAddress.kt` helper (`ConnectivityManager` active-network
+  link addresses, first non-loopback IPv4) and upserts `localPort`/`lanUrl`
+  into the existing-but-previously-unused `StationProfileEntity` columns via
+  `StationRepository`. This deliberately does **not** touch
+  `StationScreen`/`StationViewModel` (still the Phase-0 error stub) — Phase 9
+  is what reads this field and rewires Station's UI; Phase 5 only populates
+  the data so Phase 9 has something real to display.
+
+**Known gap, not yet exercised:** actual LAN/VLC/browser playback from a
+second device on the same Wi-Fi (the plan's own Phase 5 verification step)
+could not be attempted — no physical A12, no LAN, no second device reachable
+from this session. This is the next real-device step before Phase 5 closes.
+
+**Phase 9 (Reachability / frp tunnel) is code-complete but NOT build- or
+device-validated this session** (same remote-container caveat as Phase 5
+above — no `ANDROID_HOME`/SDK/`adb` here).
+
+**The plan's open item is resolved.** This session used `add_repo` to clone
+`bud-diaz/paperweightv1` read-only into this environment (it isn't a repo
+this session started with in scope, but a public GitHub repo can still be
+cloned via the session's git proxy) and read the real registration contract
+directly out of `src/api/dashboard.js`, `src/runtime/frp-config.js`,
+`src/runtime/frp-supervisor.js`, `src/telemetry/reporter.js`, and
+`docs/frp-tunnel-gateway.md`, instead of guessing it. The contract:
+
+1. `POST {PAPE_URL}/api/modules/paperweight/register` — body
+   `{slug, stationKey, secret}`. `200` on success; `409` means the slug is
+   already claimed by another station (this endpoint *is* the slug-claim
+   mechanism — trust-on-first-use, no separate "claim" call).
+2. `POST {PAPE_URL}/api/modules/paperweight/frp/tunnel/create` — header
+   `x-telemetry-secret: <secret>`, body `{slug, stationKey}`. Response:
+   `{hostname, serverAddr, serverPort, authToken, proxyName, subdomain}`
+   (all required).
+3. `frpc.toml` shape mirrors `paperweightv1`'s own `buildFrpcToml` byte-for-
+   byte (`serverAddr`/`serverPort`/`auth.token`/one `[[proxies]]` block,
+   `type = "http"`, `localIP = "127.0.0.1"`).
+4. `stationKey` — a stable per-install identifier; mirrors
+   `paperweightv1`'s `pwinst_<32-hex>` generated-once install key.
+5. Default `PAPE_URL` = `https://system.paperweighthq.com` (matches
+   `paperweightv1`'s own `config.js` default) — hardcoded, no UI to change it.
+6. Supervisor behavior (regex-scan stdout/stderr for
+   `start proxy success|login to server success|work connection registered|proxy .* started`
+   to flag connected; exponential-backoff reconnect, base 2s × attempt,
+   max 5 attempts; SIGTERM-then-SIGKILL-after-2s stop) mirrors
+   `paperweightv1`'s own `src/runtime/frp-supervisor.js` line for line.
+
+**The `frpc` ARM64 binary bundling gap flagged as a real risk in the plan is
+NOT a gap — it's actually done.** This session fetched the official
+`fatedier/frp` `v0.71.0` release tarball
+(`github.com/fatedier/frp/releases/download/v0.71.0/frp_0.71.0_linux_arm64.tar.gz`,
+via `add_repo` + a direct HTTPS download that this session's proxy allowed),
+verified the extracted `frpc` binary really is
+`ELF 64-bit LSB executable, ARM aarch64, ... statically linked` (confirmed
+with `file`, not assumed), and placed it at
+`app/src/main/jniLibs/arm64-v8a/libfrpc.so` (jniLibs-convention path per plan
+decision #6, so Android's installer extracts it with the exec bit set).
+Its Apache-2.0 `LICENSE` is vendored alongside at
+`app/src/main/assets/licenses/frp-LICENSE.txt`. `AndroidManifest.xml` gained
+one new attribute, `android:extractNativeLibs="true"` on `<application>` —
+required so the binary is actually extracted to a real file
+(`context.applicationInfo.nativeLibraryDir`) that `ProcessBuilder` can exec,
+rather than left mmap'd inside the APK zip. **This is still unverified on a
+real device** — a statically-linked Go ELF binary built for generic Linux
+ARM64 *should* run under Android's Bionic-based userland (no glibc/dynamic-
+linker dependency), and that's the standard trick for bundling Go binaries
+as Android "native libraries," but nobody has actually run it on the A12 yet.
+Confirm `frpc --version` (or equivalent) actually executes from
+`nativeLibraryDir` as the very first Phase 9 device-validation step.
+
+New `reachability/` package:
+- `FrpRegistrationClient.kt` — the two POST calls above via the
+  previously-unused `okhttp-core` dependency + `kotlinx.serialization.json`.
+- `FrpcConfigWriter.kt` — writes `<filesDir>/tunnel/frpc.toml` (app-internal,
+  not the SD card — it's regenerable/secret-bearing, not backed up).
+- `FrpcProcessSupervisor.kt` — the `ProcessBuilder` supervisor described above.
+- `ReachabilityRepository.kt` — composes registration + config-write +
+  supervisor start behind `register(slug): Result<String>` /
+  `disconnect()` / `status: StateFlow<TunnelStatus>`.
+- `TunnelHealthCheckWorker.kt` — WorkManager periodic (~15 min) HEAD request
+  against the stored public URL; only updates
+  `StationProfileEntity.lastReachableAt` (new column, see below), does not
+  restart `frpc` (the supervisor already self-heals). Scheduled from
+  `ReachabilityRepository.register()` on first successful registration,
+  cancelled from `disconnect()`.
+- `ReachabilityModels.kt` — `FrpTunnelCredentials`, `TunnelStatus` (local
+  types, not `network/models` DTOs — that package is being wound down
+  file-by-file, no reason to add to it).
+
+**New secrets store**: `data/prefs/SecurePreferences.kt` — `EncryptedSharedPreferences`
+(the `androidx.security.crypto` dependency was declared since Phase 0 but
+unused until now) holding the per-install `stationKey`, the registration
+`secret`, and the frp `authToken`. Deliberately a separate file from
+`AppPreferences` so these can never accidentally flow into
+`AppPreferences.snapshotNonSecretConfig()` and round-trip through the
+automatic SD-card backup — the Keystore key backing it does not survive
+reinstall/factory reset. `AppPreferences` gained a plain (non-secret)
+`stationSlug` field instead, since the slug itself is just the public
+subdomain, not a credential — it's now part of `NonSecretConfig` and
+round-trips through normal backup/restore.
+
+**`RecoveryInfoExporter.kt` (Phase 3 placeholder) now has real content**: it
+reveals the registration secret and frp auth token on-screen (via Settings'
+existing "Show recovery info" button) once they exist, instead of the
+Phase 3 explanatory-only placeholder text.
+
+**Schema change — read before installing on the physical A12:**
+`StationProfileEntity` gained `lastReachableAt: Long?` and
+`AppDatabase.DATABASE_VERSION` was bumped **1 → 2**. Because v1 uses
+`fallbackToDestructiveMigration()` (an accepted v1-only shortcut per this
+file's Phase 1 notes), the **first app launch after installing this build
+will destroy the existing Room database** on Bud's physical A12 — including
+whatever vault tracks/schedule/token data is already there from Phase 2/3
+testing. **Back up first** (Settings → Back up now) if that data matters,
+then restore after reinstalling, or accept the loss if the device only has
+disposable test data on it right now. The exported Room schema for version 2
+(`app/schemas/com.paperweight.os.data.db.AppDatabase/2.json`) could not be
+generated in this session — KSP only writes it during a real
+`./gradlew` build, which this session couldn't run.
+
+**Station screen fully rewritten, not just trimmed.** The old Retrofit-era
+`StationScreen`/`StationViewModel`/`StationUiState` (Cloudflare tunnel setup,
+PaperweightHQ telemetry-secret paste, directory searchability toggle,
+setup-progress checklist, product-updates signup) is gone entirely — the
+Phase 9 build-order description in the plan only calls for "LAN URL, public
+frp-tunneled URL, QR codes, tunnel connection status," and nothing in that
+list needed any of the old surface, so it was replaced rather than patched.
+`network/models/StationModels.kt` is now **fully deleted** (confirmed nothing
+else imports it) rather than just trimmed of its Cloudflare-specific types —
+every type in that file was Retrofit-era station/telemetry/signup DTO shape
+with no place in the new design. New `ui/components/QrCode.kt` wraps
+`com.google.zxing:core` (declared since Phase 0 specifically for "QR
+generation only," unused until now) for the public-URL QR code.
+
+Settings screen gained a small read-only "Public reachability" panel (slug +
+tunnel status text) — registration/slug entry itself lives on Station, per
+the plan's file split.
+
+**Known real gaps, not yet exercised (all real-device-only):**
+1. Whether `frpc` actually executes from `nativeLibraryDir` on the A12 (see above).
+2. A real end-to-end register → create-tunnel round trip against the live
+   `system.paperweighthq.com` — this session could not reach it (no network
+   egress test attempted beyond fetching `paperweightv1`'s source and the
+   `frp` release binary; the actual registration API was never called).
+3. Whether the destructive Room migration above is acceptable or needs a
+   backup-first pass on the physical device.
+
+**Phase 11 (Earnings deferral) is code-complete but NOT build- or
+device-validated this session** (same caveat as Phases 5/9 above).
+
+`EarningsScreen`/`EarningsViewModel`/`EarningsUiState` are **rewritten, not
+extended**. The Phase-0 stub set `state` to a permanent `ScreenState.Error`,
+but `EarningsScreen.kt` itself was, unusually, a fully-built revenue/tips/
+subscriptions UI (`RevenueHeroPanel`, `RevenueMixPanel`, `SupportPanel`,
+`TipConfigForm`, `TopEarnersPanel`) that had simply never been reachable
+because `ScreenStateScaffold` never calls `content()` while `state` is
+`Error`. All of that was deleted rather than kept dormant — leaving a full
+hidden payments UI in place would have been exactly the kind of
+fake-normal surface this file's decision #2 ("honest local state, not
+fabricated Content") warns against, the moment anyone flipped the state to
+`Content` in a later change.
+
+New shape: `EarningsUiState` now carries only `pricedPublicTrackCount` /
+`lowestSuggestedPriceCents` / `highestSuggestedPriceCents` /
+`actionMessage` — no revenue, no tips, no subscriptions. `EarningsViewModel`
+moved from the permanent `Error` stub to a real `Content` state, sourced
+from `VaultRepository.observeTracks()` (already composed in
+`ServiceLocator`, no new DI needed) filtered to public tracks with a
+suggested price set. `EarningsScreen` is now a static "Coming soon." header
+plus one `PricingSummaryPanel` showing that inert count/range — explicit
+copy that nothing is charged and payments aren't part of v1.
+`openPaymentSettings()` stays a no-op that reports the same message;
+`saveTipConfig()` was removed entirely (there's no tip UI left to call it).
+
+Confirmed by reading the code (not new plumbing): vault pricing
+(`suggestedPriceCents`/`minimumPriceCents`/`allowFree` on
+`VaultTrackEntity`) already round-trips end-to-end via
+`VaultViewModel.saveLocalTrackPricing()` /
+`VaultScreen.kt`'s `LocalTrackPriceForm`, built in Phase 2. Nothing new was
+needed here beyond reading it for the Earnings summary above.
+
+Deleted: `network/models/DashboardEarningsModels.kt` (only imported by
+Earnings' own three files, confirmed via grep before deleting),
+`network/models/SettingsModels.kt` and `network/models/StreamModels.kt`
+(zero importers anywhere in the app, already fully orphaned before this
+session touched them). See decision #1's correction above for what's still
+left in `network/models/` and why.
+
 ## Key decisions made this session (don't re-litigate without reason)
 
 1. **`network/models/*.kt` DTOs are deliberately kept for now**, despite
@@ -563,6 +807,17 @@ stat -c '%s' app/build/outputs/apk/debug/app-debug.apk
    slice of `network/models/*.kt` usage as it gets rewired onto Room
    entities/local repositories; the package should be fully gone by the
    time Phase 11 (Earnings) finishes.
+   **Correction after Phase 11 (this session):** "fully gone by the time
+   Phase 11 finishes" turned out to describe *Earnings' own slice*, not the
+   literal whole package — Phase 11 deleted `DashboardEarningsModels.kt`
+   (Earnings' own DTOs) plus `SettingsModels.kt`/`StreamModels.kt` (already
+   fully orphaned, zero importers anywhere), but six files
+   (`DashboardAnalyticsModels.kt`, `AudienceModels.kt`, `VaultModels.kt`,
+   `LibraryModels.kt`, `BroadcastModels.kt`, `ScheduleModels.kt`) are still
+   genuinely imported by Analytics/Overview, Audience, Vault, Broadcast, and
+   Schedule — screens whose own rewrite phases (6, 7, 8, 10) weren't in this
+   session's scope. The package can't be literally empty until those phases
+   run; don't be misled by the original phrasing here.
 2. **Stub ViewModels use `ScreenState.Error`, not fabricated `Content`.**
    Considered building plausible empty-but-valid `UiState` instances instead
    (so screens render normally instead of a red error banner), but that
@@ -660,19 +915,46 @@ Phase 3 remaining real-device recovery validation:
    data/reinstall, grant/select the `Paperweight` folder, choose restore, and
    confirm vault metadata/config returns without re-ingesting media.
 
-Phase 4 is closed for the local broadcast-engine core. Remaining playback work is
-Phase 5 scope: serve the generated `live.m3u8`/`.aac` files over NanoHTTPD with
-Range support, add the bundled listener player, and do the LAN/VLC/browser
-playback validation from another device on the same Wi-Fi.
+**Phases 5, 9, and 11 are all code-complete this session but share one
+blocking gap: none of it has run through a real Kotlin compiler or on a real
+device yet.** This session ran entirely in a remote container with JDK 21 and
+no `ANDROID_HOME`/SDK/`adb` — every phase below was written and carefully
+self-reviewed, not built. Do this, in order, on Bud's machine before treating
+any of the three as closed:
 
-Phases 5–12 per the plan file, once Phase 4 is complete:
-1. **Phase 5 — Embedded server + listener player**: NanoHTTPD routes with Range
-   support, vendored listener web assets, LAN playback.
-2. Phases 6–12 as detailed in the plan file.
+1. **Back up first.** Phase 9 bumped `AppDatabase` version 1→2
+   (`fallbackToDestructiveMigration()` will wipe the physical A12's existing
+   Room DB on first launch of this build). Run Settings → Back up now on the
+   *current* installed build before installing this one, if the existing
+   vault/schedule/token data on the device matters.
+2. `./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest` —
+   first real compile of all three phases' code. Fix whatever a real compiler
+   finds; nothing here has been machine-verified yet.
+3. `adb install -r` + smoke: confirm boot still reaches the dashboard,
+   `BroadcastService` still runs foreground, lockTask still holds.
+4. **Phase 5 check:** from a second device on the same Wi-Fi, open
+   `http://<lan-ip>:<port>/` in a browser (bundled hls.js listener page) and
+   `http://<lan-ip>:<port>/live/playlist.m3u8` in VLC — both should play
+   audio once a public vault track exists.
+5. **Phase 9 checks, in order:** confirm `frpc` actually executes from
+   `context.applicationInfo.nativeLibraryDir` (the jniLibs-bundled binary has
+   never been run — see the Phase 9 section above); then a real
+   register/create-tunnel round trip against `system.paperweighthq.com` with
+   a real slug from the Station screen; then confirm the public URL plays in
+   a browser from outside the LAN.
+6. **Phase 11 check:** open Earnings, confirm the "Coming soon" shell renders
+   with the correct priced-track count/range instead of the old revenue UI
+   or an error state.
+7. Run `./gradlew :app:connectedDebugAndroidTest` — no new instrumented tests
+   were added this session (none of the three phases had an obvious
+   device-only behavior worth a *new* test beyond what steps 3–6 already
+   exercise manually), so this just confirms nothing from Phases 0–4's
+   existing suite regressed.
 
-Also still open, carried in the plan itself: the frp registration contract
-(Phase 9) needs to be read directly from `paperweightv1` in a local session
-where that repo is available — don't guess it.
+Phases 6, 7, 8, 10, and 12 (mic go-live, scheduling, access tokens,
+analytics/audience, final polish) were **not** touched this session — the
+user asked specifically for phases 5, 9, and 11, in that order, skipping the
+others for now. Pick those up per the plan file when scoped.
 
 ## Repo layout as of this handoff
 
@@ -701,27 +983,44 @@ app/src/main/java/com/paperweight/os/
 │   ├── MetadataExtractor.kt         // MediaMetadataRetriever wrapper
 │   ├── VaultFileStore.kt            // pure SAF copy into Paperweight/vault/
 │   └── VaultIngestor.kt             // tree-grant persist/check + ingest() orchestration
-├── di/ServiceLocator.kt             // Phase 1 composition root, + vaultIngestor (Phase 2), + broadcastEngine (Phase 4)
-├── broadcast/                       // NEW (Phase 4)
+├── di/ServiceLocator.kt             // + embeddedHttpServer (Phase 5), + securePreferences/reachabilityRepository (Phase 9)
+├── broadcast/                       // Phase 4; BroadcastService now also owns the embedded server (Phase 5)
 │   ├── BroadcastEngine.kt / BroadcastService.kt / BroadcastState.kt
 │   ├── decode/TrackDecoder.kt
 │   ├── encode/AacEncoder.kt / AdtsHeaderWriter.kt
 │   └── hls/PlaylistWriter.kt / SegmentWriter.kt / SegmentStore.kt
-├── network/models/                 // KEPT (see Key decisions #1), transport layer deleted
+├── server/                          // NEW (Phase 5) — NanoHTTPD
+│   ├── EmbeddedHttpServer.kt / RangeResponse.kt / LanAddress.kt
+│   └── routes/PlaylistRoute.kt / SegmentRoute.kt / StatusRoute.kt / ListenerWebRoute.kt
+├── reachability/                    // NEW (Phase 9) — frp tunnel
+│   ├── FrpRegistrationClient.kt / FrpcConfigWriter.kt / FrpcProcessSupervisor.kt
+│   ├── ReachabilityRepository.kt / ReachabilityModels.kt / TunnelHealthCheckWorker.kt
+├── network/models/                 // KEPT (see Key decisions #1, corrected after Phase 11)
 │   ├── AudienceModels.kt / BroadcastModels.kt / DashboardAnalyticsModels.kt
-│   ├── DashboardEarningsModels.kt / LibraryModels.kt / ScheduleModels.kt
-│   ├── SettingsModels.kt / StationModels.kt / StreamModels.kt / VaultModels.kt
+│   ├── LibraryModels.kt / ScheduleModels.kt / VaultModels.kt
+│   // StationModels.kt, DashboardEarningsModels.kt, SettingsModels.kt, StreamModels.kt
+│   // deleted (Phases 9 and 11) — see their HANDOFF sections above
 └── ui/
     ├── theme/                      // untouched
     ├── nav/                        // untouched
-    ├── components/                 // untouched
+    ├── components/                 // + QrCode.kt (Phase 9, zxing)
     ├── setup/SdCardRequiredScreen.kt  // NEW (Phase 0)
-    └── dashboard/                  // Vault rewired for local ingestion (Phase 2);
-                                     // Overview/Broadcast collect BroadcastEngine state (Phase 4);
-                                     // settings rewired for backup controls (Phase 3);
-                                     // remaining screens still use Phase 0 Error stubs
+    └── dashboard/                  // Vault (Phase 2), Overview/Broadcast (Phase 4),
+                                     // Settings (Phase 3, + reachability panel Phase 9),
+                                     // Station (Phase 9, full rewrite),
+                                     // Earnings (Phase 11, static shell) all rewired;
+                                     // schedule/vault-legacy-panels/audience/analytics
+                                     // still use Phase 0 Error stubs or legacy no-ops
         ├── overview/ broadcast/ schedule/ vault/ station/
         └── audience/ analytics/ earnings/ settings/
+
+app/src/main/assets/
+├── fonts_licenses/                  // unchanged
+├── licenses/frp-LICENSE.txt         // NEW (Phase 9) — Apache-2.0 for the bundled frpc binary
+└── listener/                        // NEW (Phase 5) — vendored static player: index.html,
+                                      // player.js, styles.css, hls.min.js (+ its LICENSE)
+
+app/src/main/jniLibs/arm64-v8a/libfrpc.so   // NEW (Phase 9) — real fatedier/frp v0.71.0 ARM64 binary
 ```
 
 `pairing/` and the transport half of `network/` no longer exist.
