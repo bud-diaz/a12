@@ -148,7 +148,7 @@ provisioning/
 
 ## Provisioning flow (per physical device)
 
-1. Factory reset the A12.
+1. Factory reset the A12. If this is a legitimate re-provisioning of a used Paperweight device, leave any Android/Samsung "erase SD card" option unchecked so existing `Paperweight/vault/` media and `Paperweight/backups/` snapshots remain on the removable card.
 1. Skip Google account setup entirely — Device Owner provisioning requires no
    accounts present on the device. This is a hard Android constraint, not
    optional.

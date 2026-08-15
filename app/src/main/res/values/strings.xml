@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Paperweight OS</string>
     <string name="device_admin_disable_warning">Disabling device admin removes Paperweight OS from lock-task mode. Use adb to manage this device instead.</string>
-    <string name="setup_pending_message">Awaiting device owner provisioning. Run the setup script over adb, then reboot.</string>
+    <string name="setup_pending_message">Awaiting device owner provisioning. Run the setup script over adb, then reboot. After provisioning, insert the SD card; the first Vault setup should create or select a folder named Paperweight on that card.</string>
 
     <string name="pairing_camera_permission_required">Camera access is needed to scan the pairing code from Studio.</string>
     <string name="pairing_scan_instructions">Open Studio on a device that\'s already signed in, choose \"Pair a new device,\" and scan the QR code shown there.</string>

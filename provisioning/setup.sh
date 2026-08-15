@@ -21,4 +21,14 @@ adb install -r "${APK_PATH}"
 echo "Claiming device owner..."
 adb shell dpm set-device-owner "${ADMIN_RECEIVER}"
 
-echo "Done. Reboot the device to boot straight into Mission Control."
+cat <<'EOF'
+Done. Reboot the device to boot straight into Paperweight OS.
+
+Vault setup note for the operator:
+  - If Android ever needs a factory reset/re-provisioning, leave any "erase SD card" option unchecked; Paperweight backups and vault media live on that removable card.
+  - Insert the removable SD card before opening the Vault screen.
+  - The first time you tap "Add to vault," Android's folder picker will open.
+  - Open the SD card, create or select a folder named exactly "Paperweight,"
+    then tap "Use this folder."
+  - Paperweight OS will store ingested media under Paperweight/vault/.
+EOF

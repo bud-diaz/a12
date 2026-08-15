@@ -86,7 +86,7 @@ fun VaultScreen(viewModel: VaultViewModel = viewModel()) {
             }
         } else {
             pendingTreeGrant = false
-            viewModel.notify("SD card folder access is required to add to the vault.")
+            viewModel.notify("Create or select the Paperweight folder on the SD card to add to the vault.")
         }
     }
     val onAddToVault: () -> Unit = {
@@ -95,6 +95,7 @@ fun VaultScreen(viewModel: VaultViewModel = viewModel()) {
                 filePickerLauncher.launch(arrayOf("audio/*"))
             } else {
                 pendingTreeGrant = true
+                viewModel.notify("In the picker, open the SD card, create or select a folder named Paperweight, then tap Use this folder.")
                 treeLauncher.launch(null)
             }
         }
@@ -321,6 +322,12 @@ private fun HeroPanel(trackCount: Int, projectCount: Int, onAddToVault: () -> Un
                     text = "$trackCount priced ${if (trackCount == 1) "track" else "tracks"}, $projectCount ${if (projectCount == 1) "collection" else "collections"}",
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(top = 4.dp),
+                )
+                Text(
+                    text = "First time: choose the SD card, create or select a folder named Paperweight, then tap Use this folder. Vault files are stored in Paperweight/vault/.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
             }
             Button(onClick = onAddToVault) { Text("Add to vault") }

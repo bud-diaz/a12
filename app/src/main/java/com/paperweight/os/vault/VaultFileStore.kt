@@ -5,13 +5,13 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import java.io.IOException
 
-// Copies ingested source audio into Paperweight/vault/ on the SD card
-// (plan decision #11) so the working vault stays portable and
-// self-contained on removable media, independent of where the source file
-// originally lived. Takes an already-granted tree URI — acquiring and
-// persisting that grant is VaultIngestor's job (decision #10). Callers are
-// expected to run this off the main thread; SAF document operations are
-// blocking.
+// Copies ingested source audio into vault/ under the operator-granted
+// Paperweight folder on the SD card (plan decision #11) so the working vault
+// stays portable and self-contained on removable media, independent of where
+// the source file originally lived. Takes an already-granted tree URI —
+// acquiring and persisting that grant is VaultIngestor's job (decision #10).
+// Callers are expected to run this off the main thread; SAF document
+// operations are blocking.
 object VaultFileStore {
     private const val ROOT_FOLDER_NAME = "Paperweight"
     private const val VAULT_FOLDER_NAME = "vault"
@@ -34,7 +34,16 @@ object VaultFileStore {
 
     private fun vaultDirectory(context: Context, treeUri: Uri): DocumentFile? {
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return null
-        val paperweight = root.findFile(ROOT_FOLDER_NAME) ?: root.createDirectory(ROOT_FOLDER_NAME) ?: return null
+        // Android 11 DocumentsUI refuses to grant the removable SD-card root,
+        // so setup tells the operator to create/select a Paperweight folder.
+        // If that folder is the granted tree, write directly to vault/ under
+        // it; if an older/nonstandard grant points one level higher, keep the
+        // legacy fallback of creating Paperweight/vault/.
+        val paperweight = if (root.name == ROOT_FOLDER_NAME) {
+            root
+        } else {
+            root.findFile(ROOT_FOLDER_NAME) ?: root.createDirectory(ROOT_FOLDER_NAME) ?: return null
+        }
         return paperweight.findFile(VAULT_FOLDER_NAME) ?: paperweight.createDirectory(VAULT_FOLDER_NAME)
     }
 

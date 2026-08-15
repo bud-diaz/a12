@@ -116,10 +116,12 @@ class Phase1DataLayerInstrumentedTest {
         preferences.setServerPort(8088)
         preferences.setBackupRetentionCount(5)
         preferences.setBackupIntervalHours(12)
+        preferences.setInitialRestoreDecisionMade(true)
 
         assertThat(preferences.stationName.first()).isEqualTo("Fifth Avenue")
         assertThat(preferences.serverPort.first()).isEqualTo(8088)
         assertThat(preferences.backupRetentionCount.first()).isEqualTo(5)
         assertThat(preferences.backupIntervalHours.first()).isEqualTo(12)
+        assertThat(preferences.initialRestoreDecisionMade.first()).isTrue()
     }
 }

@@ -117,28 +117,187 @@ Room schema, and a real instrumented test suite. `Phase1DataLayerInstrumentedTes
 was first run red against missing data-layer classes, then green after
 implementation. Final result: 5 tests, 0 failures, 0 errors on `SM-A125U - 11`.
 
-**Phase 2 (Vault ingestion) is code-complete but UNVERIFIED — this session had
-no Android SDK, no `adb`, and no physical device.** This session ran in a
-different sandboxed remote environment than the one that validated Phases 0–1
-(no `/home/bud` machine, no `~/Android` SDK). Confirmed unavailable:
+**Phase 2 (Vault ingestion) is now build-verified and partially on-device
+verified on the connected Galaxy A12.** Current session used Temurin JDK 17 at
+`/home/bud/.local/jdks/jdk-17`, Android SDK at `/home/bud/Android/Sdk`, and the
+connected `SM-A125U` / Android 11 A12. A real SAF storage-path gap was found and
+then fixed: setup now tells the operator to create/select a `Paperweight` folder
+on the SD card, and `VaultFileStore` writes directly to `vault/` when that
+granted folder is already the Paperweight root.
+
+Real build results:
 
 ```bash
-which adb        # not found
-ls ~/Android     # No such file or directory
-./gradlew :app:compileDebugKotlin
-# FAILURE: Plugin [id: 'com.android.application', version: '8.6.0'] was not
-# found — this environment's proxy doesn't reach Google's Maven plugin repo,
-# so even a bare Kotlin compile check couldn't be run.
+export JAVA_HOME=/home/bud/.local/jdks/jdk-17
+export ANDROID_HOME=/home/bud/Android/Sdk
+export ANDROID_SDK_ROOT=/home/bud/Android/Sdk
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+./gradlew :app:compileDebugKotlin assembleDebug # BUILD SUCCESSFUL in 3m 18s
+./gradlew :app:testDebugUnitTest                 # BUILD SUCCESSFUL; testDebugUnitTest NO-SOURCE
 ```
 
-So none of Phase 2's code has been built, installed, or exercised on-device
-this session — everything below is implementation + careful manual review
-only. Treat this the same as the plan's Phase 9 frp-contract deferral: the
-next session with real Android SDK + `adb` + the physical A12 needs to run
-the full Phase 0/1-style build-and-install-and-smoke-test pass on Phase 2
-before it's trusted, **and specifically needs to check the lockTask
-allowlist item under "Key decisions" below before assuming ingestion works
-at all inside the kiosk.**
+`assembleDebug` produced `app/build/outputs/apk/debug/app-debug.apk`
+(size observed: 64,590,663 bytes). Warnings were the already-known Compose icon
+deprecations and the existing `libandroidx.graphics.path.so` strip warning.
+
+On-device smoke result:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell uiautomator dump /sdcard/window.xml
+```
+
+With the valid SD card mounted as `public:179,97` / `/storage/ED4F-17F7`, the
+app launched to the dashboard, navigation opened, and the Vault screen rendered
+Phase 2 content (`Add to vault`, `Your vault`, and the empty "Nothing ingested
+yet" state). `mLockTaskModeState=LOCKED`.
+
+The Phase 2 lockTask allowlist fix is confirmed: tapping `Add to vault` launched
+`com.google.android.documentsui/com.android.documentsui.picker.PickActivity`
+inside lockTask, and `dumpsys activity` showed the DocumentsUI task as
+`LOCK_TASK_AUTH_WHITELISTED` with `mLockTaskModeState=LOCKED`.
+
+A direct instrumented validation of the ingestion backend path was also run on
+the real A12 using a temporary test and a generated sample WAV. Result:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.vault.Phase2VaultIngestionInstrumentedTest
+# Starting 1 tests on SM-A125U - 11
+# Finished 1 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+```
+
+The test exercised `VaultIngestor.ingest()` against a real persisted SAF tree
+grant, verified metadata fallback/duration/mime, copied the sample into the
+granted SD tree, and persisted the resulting `VaultTrackEntity` into Room.
+Physical file observed afterward:
+
+```bash
+/storage/ED4F-17F7/A12Phase2Grant/Paperweight/vault/a12-phase2-sample.wav
+# 176,444 bytes
+```
+
+**Important gap found and fixed:** Android 11 DocumentsUI will not grant the
+SD-card root itself (`Can’t use this folder / To protect your privacy, choose
+another folder`). The validation had to create/grant a subfolder
+(`A12Phase2Grant`). Setup now tells the operator to create/select a folder named
+`Paperweight` on the SD card, and `VaultFileStore` treats a granted folder named
+`Paperweight` as the vault root, creating `vault/` directly underneath it instead
+of nesting `Paperweight/Paperweight/vault`. If an older/nonstandard grant points
+one level above Paperweight, the code still falls back to creating/using
+`Paperweight/vault/` under that granted tree.
+
+Remote adb automation confirmed the picker opens, but did not complete a full
+human-style `OpenMultipleDocuments` file selection through DocumentsUI; the
+backend ingest/copy/Room path was verified by the direct instrumented test
+above.
+
+**Phase 3 (Backup & recovery) has started and the core backup/restore path is
+build-verified plus instrumented-test verified on the physical A12.** This pass
+added the backup package, non-secret preference export/import, backup controls in
+Settings, and operator recovery guidance. The tested core path writes
+`Paperweight/backups/<timestamp>/` snapshots containing:
+
+- `paperweight-os.db` produced through SQLite `VACUUM INTO` into a temp file,
+  then copied into the SAF/DocumentFile snapshot directory;
+- `preferences.json` containing only non-secret `AppPreferences` fields;
+- `manifest.json` containing timestamp, app version, schema version, DB file,
+  and preferences file names.
+
+Phase 3 validation run on `SM-A125U - 11`:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.backup.Phase3BackupRecoveryInstrumentedTest
+# Starting 3 tests on SM-A125U - 11
+# Finished 3 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 8 tests on SM-A125U - 11
+# Finished 8 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+```
+
+General build validation after the Phase 3 changes:
+
+```bash
+./gradlew :app:compileDebugKotlin assembleDebug :app:testDebugUnitTest
+# BUILD SUCCESSFUL; testDebugUnitTest NO-SOURCE
+# app/build/outputs/apk/debug/app-debug.apk observed at 65,639,488 bytes
+adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
+adb shell am start -n com.paperweight.os/.MainActivity
+# MainActivity resumed on the physical A12; mLockTaskModeState=LOCKED after wake/dismiss-keyguard.
+```
+
+The full first-run Compose restore-vs-start-fresh gate is now wired into the
+boot chain before `DashboardApp()` and before any dashboard repository opens
+Room. The boot chain is now Device Owner → SD-card present/sized → SAF
+`Paperweight` folder grant → backup scan → restore-or-start-fresh decision →
+dashboard. Existing installs with an already-present `paperweight-os.db` are
+marked as already past the restore decision so app updates don't interrupt a
+working device.
+
+Additional gate validation on the physical A12 after install:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
+adb shell am start -n com.paperweight.os/.MainActivity
+# Restore gate visible:
+#   Backup & recovery
+#   Before the dashboard opens, choose the SD-card folder named Paperweight...
+#   Choose Paperweight folder
+# DocumentsUI launched inside lockTask and remained LOCK_TASK_AUTH_WHITELISTED.
+# After allowing the folder with no backups present:
+#   No existing backup was found in Paperweight/backups/.
+#   Start fresh
+# Tapping Start fresh continued to the dashboard; mLockTaskModeState=LOCKED.
+```
+
+**Phase 4 (Broadcast engine core) has started.** This pass added the first local
+broadcast engine scaffold, foreground service, HLS writer primitives, and
+Overview/Broadcast screen rewiring. The engine now observes local public vault
+tracks, publishes a `BroadcastState`, writes an initial packed-audio HLS window
+(`init.aac`, `segment-*.aac`, `live.m3u8`) via `SegmentStore`/`PlaylistWriter`,
+and starts as a foreground service once the restore gate has completed and the
+dashboard is allowed to open. The current segment payload is a silent AAC/ADTS
+heartbeat scaffold for the engine/service/playlist path; full source-track
+decode-to-AAC audio rotation still needs to replace that scaffold before LAN
+playback can be called product-complete.
+
+Phase 4 validation on `SM-A125U - 11`:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase4BroadcastEngineInstrumentedTest
+# Starting 3 tests on SM-A125U - 11
+# Finished 3 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:compileDebugKotlin assembleDebug :app:testDebugUnitTest :app:connectedDebugAndroidTest
+# Starting 12 tests on SM-A125U - 11
+# Finished 12 tests on SM-A125U - 11
+# BUILD SUCCESSFUL; testDebugUnitTest NO-SOURCE
+```
+
+On-device smoke after install confirmed `MainActivity` resumed into the Overview
+screen, `BroadcastService` was running foreground with notification channel
+`paperweight_broadcast`, and lockTask remained locked:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk # Success
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell dumpsys activity services com.paperweight.os | grep BroadcastService
+# ServiceRecord ... com.paperweight.os/.broadcast.BroadcastService
+# isForeground=true foregroundId=404
+adb shell dumpsys notification --noredact | grep -A4 'Paperweight broadcast'
+# android.title=Paperweight broadcast
+adb shell dumpsys activity activities | grep mLockTaskModeState
+# mLockTaskModeState=LOCKED
+```
 
 ## Status: what's built (Phase 0)
 
@@ -234,8 +393,9 @@ at all inside the kiosk.**
 - **New `vault/` package**: `MetadataExtractor.kt` (wraps
   `MediaMetadataRetriever` — title/artist/album/duration/mime, falling back
   to the source filename when a track has no title tag), `VaultFileStore.kt`
-  (pure SAF `DocumentFile` copy into `Paperweight/vault/` on an already-
-  granted tree URI — creates the folder chain if missing, de-dupes
+  (pure SAF `DocumentFile` copy into `vault/` when the already-granted tree URI
+  is the operator-selected `Paperweight` folder; otherwise falls back to
+  creating/using `Paperweight/vault/` under the granted tree; de-dupes
   filenames), and `VaultIngestor.kt` (owns the one-time tree-grant
   persist/re-validate logic per decision #10, and orchestrates
   extract-then-copy-then-`VaultRepository.upsertTrack` as one `ingest()`
@@ -295,6 +455,87 @@ at all inside the kiosk.**
   `MANAGE_EXTERNAL_STORAGE`); confirmed nothing else in Phase 2 needed a
   manifest change either.
 
+## Status: what's built (Phase 3)
+
+- **New `backup/` package**:
+  - `BackupWriter.kt` writes `Paperweight/backups/<timestamp>/` under the same
+    operator-granted SAF tree used by Vault. It treats a granted folder named
+    `Paperweight` as the root, matching the Phase 2 SAF contract, and falls back
+    to creating/using `Paperweight/backups/` if an older/nonstandard grant points
+    one level above it.
+  - `BackupModels.kt` defines `BackupManifest` and `BackupSnapshot`.
+  - `BackupPruner.kt` keeps the newest N snapshot directories by timestamp name.
+  - `RestoreManager.kt` copies `paperweight-os.db` into the fixed Room DB path
+    and restores non-secret preferences before a new Room instance is opened.
+  - `BackupScheduler.kt` defines the WorkManager periodic/one-shot scheduling
+    shell and `BackupWorker`.
+  - `RecoveryInfoExporter.kt` is a deliberately plain text placeholder for the
+    Phase 9 secret-export concept; no secrets exist yet, and automatic backups
+    intentionally exclude future Android-Keystore-backed secrets.
+- **`AppPreferences` gained non-secret export/import** via
+  `snapshotNonSecretConfig()` and `restoreNonSecretConfig(...)`. Exported fields
+  are station name, server port, backup retention, backup interval, and the
+  non-secret vault tree URI. Future frp/reachability secrets must not be added
+  to this automatic backup JSON.
+- **Settings screen rewired to local backup controls** instead of the old remote
+  webhook/feed/account/docs surface: it now shows SAF target readiness, retention
+  count, interval hours, `Back up now`, and `Show recovery info`. Legacy handler
+  methods still exist on `SettingsViewModel` and fail soft with a local-only
+  message if any old composable reference survives.
+- **Provisioning guidance updated** in `provisioning/setup.sh` and `CLAUDE.md`:
+  if Android/Samsung factory reset is used for legitimate re-provisioning, leave
+  any "erase SD card" option unchecked because vault media and backups live on
+  the removable card.
+- **New instrumented tests**:
+  `app/src/androidTest/java/com/paperweight/os/backup/Phase3BackupRecoveryInstrumentedTest.kt`
+  verifies backup snapshot contents, pruning, and restore of DB + non-secret
+  preferences before Room reopens. These tests run on the physical A12 and use a
+  file-backed `DocumentFile` tree so they do not mutate the real SD card.
+- **Restore gate wired into `MainActivity`**: after the SD-card gate clears,
+  `MainActivity` now checks `AppPreferences.initialRestoreDecisionMade`. If the
+  first-run decision has not happened, it renders `RestoreGateScreen` instead of
+  `DashboardApp`, launches `ACTION_OPEN_DOCUMENT_TREE` for the one-time
+  `Paperweight` folder grant, scans for the newest backup via `RestoreManager`,
+  offers restore vs. start fresh, and only then lets the dashboard open. This is
+  deliberately before `ServiceLocator.database` is touched by dashboard
+  ViewModels, preserving the plan requirement that restore runs before Room
+  creates/opens an empty DB.
+
+## Status: what's built (Phase 4)
+
+- **New `broadcast/` package scaffold**:
+  - `BroadcastState.kt` defines local `BroadcastState` and `BroadcastQueueTrack`.
+  - `BroadcastEngine.kt` observes local vault tracks, filters to public tracks,
+    publishes now-playing/queue state, supports mode toggle/restart/remove, and
+    writes an initial HLS window when public tracks are available.
+  - `BroadcastService.kt` starts the engine as a sticky foreground service with
+    notification channel `paperweight_broadcast`.
+  - `encode/AdtsHeaderWriter.kt` writes/parses AAC-LC ADTS headers;
+    `encode/AacEncoder.kt` currently provides the silent AAC/ADTS heartbeat
+    payload used by the initial HLS scaffold.
+  - `hls/PlaylistWriter.kt`, `hls/SegmentWriter.kt`, and `hls/SegmentStore.kt`
+    write packed-audio segment files and an atomic `live.m3u8` playlist.
+  - `decode/TrackDecoder.kt` can inspect an audio URI via `MediaExtractor` and
+    confirm basic track duration/mime metadata, but full source decode into the
+    encoder is still the main unfinished Phase 4 item.
+- **Manifest/service changes**: added foreground-service/network/wake/notification
+  permissions needed for the always-on broadcast service and declared
+  `.broadcast.BroadcastService` with `foregroundServiceType="specialUse"` and
+  `PROPERTY_SPECIAL_USE_FGS_SUBTYPE=internet_radio_broadcast_encoding`.
+- **`ServiceLocator` gained `broadcastEngine`**, composed from the existing local
+  repositories. `MainActivity` starts `BroadcastService` only after the restore
+  gate has completed and `DashboardApp()` is allowed, so Phase 3's pre-Room
+  restore rule is preserved.
+- **Broadcast + Overview screens are no longer error stubs**: `BroadcastViewModel`
+  and `OverviewViewModel` now collect the local `BroadcastEngine.state` and render
+  real Content state. With no public vault tracks, Overview shows zero catalog /
+  nothing queued instead of the old "not wired" error.
+- **New instrumented tests**:
+  `app/src/androidTest/java/com/paperweight/os/broadcast/Phase4BroadcastEngineInstrumentedTest.kt`
+  verifies ADTS header construction, HLS playlist writing, public-only queue
+  selection, now-playing publication, and initial HLS file creation on the
+  physical A12.
+
 ## Key decisions made this session (don't re-litigate without reason)
 
 1. **`network/models/*.kt` DTOs are deliberately kept for now**, despite
@@ -323,13 +564,13 @@ at all inside the kiosk.**
    validation update." `compileDebugKotlin`, `assembleDebug`, APK install on
    the real A12, no-SD-card gate, SD-card public formatting/mounting, and
    valid-card dashboard entry all passed.
-4. **Manifest/permission additions are added per-phase, not front-loaded.**
-   `RECORD_AUDIO`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`,
-   `POST_NOTIFICATIONS`, `ACCESS_WIFI_STATE`, `WAKE_LOCK`, and the
-   `BroadcastService` declaration all belong to later phases (mic capture,
-   the foreground service itself) — adding them speculatively now with no
-   corresponding implementation was judged worse than adding them exactly
-   when needed.
+4. **Manifest/permission additions are still added per-phase, not front-loaded.**
+   Phase 4 added only what the always-on broadcast foreground service now needs:
+   `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`,
+   `ACCESS_WIFI_STATE`, `WAKE_LOCK`, and the `BroadcastService` declaration.
+   `RECORD_AUDIO` / `FOREGROUND_SERVICE_MICROPHONE` still belong to the later mic
+   go-live phase and should not be added until that phase actually implements mic
+   capture.
 5. Carried forward from the pre-pivot sessions (still relevant): kiosk/
    Device-Owner mechanics in `admin/`, `provisioning/SetupActivity.kt`, and
    `provisioning/setup.sh` are untouched and still valid — this pivot only
@@ -343,9 +584,9 @@ at all inside the kiosk.**
    The Phase 0 ViewModel stubs remain in place; screen-by-screen rewiring starts
    in later phases as each domain gets implemented. Phase 1's deliverable is the
    local persistence/composition foundation and tests, not visible UI data.
-8. **RESOLVED (this session, follow-up): the lockTask blocker on the SAF/content
-   pickers is now fixed via dynamic `PackageManager` resolution instead of a
-   hardcoded package name — still unverified on real hardware.**
+8. **RESOLVED and verified on the physical A12: the lockTask blocker on the
+   SAF/content pickers is fixed via dynamic `PackageManager` resolution instead
+   of a hardcoded package name.**
    `DeviceOwnerPolicy.setLockTaskPackages` previously only allowlisted
    `com.paperweight.os` and `com.android.settings`, which blocks
    `ACTION_OPEN_DOCUMENT_TREE`/`ACTION_OPEN_DOCUMENT` (the "Add to vault"
@@ -361,10 +602,10 @@ at all inside the kiosk.**
    manifest declaration (`AndroidManifest.xml`) for the three intents, since
    Android 11+ package-visibility filtering would otherwise make
    `queryIntentActivities` return nothing for a non-privileged app.
-   **This still has not been confirmed on the physical A12** — this session
-   still has no `adb`/Android SDK (same limitation as the rest of Phase 2).
-   `DeviceOwnerPolicy` logs an `android.util.Log.w` warning if resolution
-   comes back empty, to make that debuggable on the next real-device session.
+   Validation on the `SM-A125U` showed the picker resolves to
+   `com.google.android.documentsui`, launches from `Add to vault`, and remains
+   inside lockTask as `LOCK_TASK_AUTH_WHITELISTED` with
+   `mLockTaskModeState=LOCKED`.
 9. **`storagePath` on `VaultTrackEntity` now stores the ingested file's own
    SAF document URI (`content://...`), not a relative path string.** The
    Phase 1 instrumented test's example data used a human-readable relative
@@ -376,40 +617,54 @@ at all inside the kiosk.**
    real `VaultIngestor` writes there. Later phases (broadcast engine reading
    vault files, Phase 3 backup) should treat `storagePath` as an opaque SAF
    URI, not a filesystem path.
-10. **This session could not run `./gradlew` at all** — no Android SDK, no
-    `adb`, and this remote sandbox's network proxy doesn't reach Google's
-    Maven plugin repository (`com.android.application` plugin resolution
-    failed even for a bare `compileDebugKotlin` attempt). Phase 2's code is
-    implementation + manual review only, unlike every prior phase in this
-    file, which all had a real on-device build/install/smoke pass before
-    being marked done. Do not treat Phase 2 as verified until that happens.
+10. **Phase 2 now has real compiler, install, picker-launch, and direct
+    ingestion feedback from the physical A12, and the SAF-root assumption has
+    been corrected.** Android 11 DocumentsUI refuses an SD-card-root tree grant
+    (`Can’t use this folder`), so the product contract is now: operator creates
+    or selects a `Paperweight` folder on the SD card as the SAF root. The setup
+    script, pre-device-owner setup copy, and Vault screen copy all say that.
+    `VaultFileStore` no longer nests `Paperweight/Paperweight/vault` when the
+    granted tree is already named `Paperweight`; it writes directly to `vault/`
+    under that tree. Older/nonstandard grants still fall back to
+    `Paperweight/vault/` under the granted tree.
+11. **Automatic backups are non-secret by design.** Phase 3 snapshots contain
+    the Room DB and a JSON export of plain `AppPreferences` fields only. Future
+    frp/reachability secrets must not be added to `preferences.json`; Android
+    Keystore-backed secrets will need a separate one-time recovery-info export
+    because the Keystore key will not survive reinstall/factory reset.
 
 ## What's left
 
-**Phase 2 is code-complete but needs a real-device pass before it's trusted**
-(see "Latest validation update" and key decisions #8–10 above). In order,
-before starting Phase 3:
-1. Build on a machine with the Android SDK (`./gradlew :app:compileDebugKotlin
-   assembleDebug`) — this has not happened for Phase 2's code yet.
-2. Install on the physical A12 and try "Add to vault" for real. The lockTask
-   package allowlist is now computed dynamically (key decision #8) so this
-   *should* just work — confirm the picker actually opens, and if it
-   doesn't, check logcat for `DeviceOwnerPolicy`'s "No package resolved..."
-   warning and `adb shell dumpsys activity activities | grep -E
-   'mLockTaskModeState|mLockTaskAuth'` to see what's actually happening.
-3. Once the picker actually opens: grant the SD-card folder, pick a real
-   audio file, confirm it appears under "Your vault" with extracted
-   metadata, confirm the file physically lands under `Paperweight/vault/` on
-   the card (inspect via `adb shell` or a card reader, not internal
-   storage), and confirm "Edit price" round-trips through Room.
+**Phase 2's remaining validation is manual end-to-end polish, not the previous
+storage-contract blocker.** Build/install/UI smoke now passes with the corrected
+operator copy and `VaultFileStore` path logic. Before starting Phase 3, run one
+final human/manual picker pass: choose the intended `Paperweight` folder, pick a
+real audio file through `OpenMultipleDocuments`, confirm it appears under "Your
+vault," confirm the physical file lands in `Paperweight/vault/` without a nested
+`Paperweight/Paperweight/`, and confirm "Edit price" round-trips through the app
+DB.
 
-Phases 3–12 per the plan file, once the above is confirmed:
-1. **Phase 3 — Backup & recovery**: see plan decision #12. Reuses the same
-   SAF tree URI Phase 2 now persists in `AppPreferences.vaultTreeUri` —
-   don't build a second tree-grant mechanism.
-2. **Phase 4 — Broadcast engine core**: decode/encode/segment/playlist
-   pipeline, `BroadcastEngine`, `BroadcastService`, Overview/Broadcast rewiring.
-3. Phases 5–12 as detailed in the plan file.
+Phase 3 remaining real-device recovery validation:
+1. Run a real/manual backup-now pass against the actual SD card via Settings,
+   then inspect `Paperweight/backups/<timestamp>/` on the card.
+2. Run the practical restore rehearsal: leave the SD card inserted, clear app
+   data/reinstall, grant/select the `Paperweight` folder, choose restore, and
+   confirm vault metadata/config returns without re-ingesting media.
+
+Phase 4 remaining work before moving to Phase 5:
+1. Replace the silent AAC/ADTS heartbeat scaffold with true source-track decode
+   (`MediaExtractor`/`MediaCodec`) feeding AAC encoding and segment rotation from
+   the copied vault file URIs.
+2. Validate with a real ingested audio track that `live.m3u8` + segments are
+   playable locally before relying on Phase 5's NanoHTTPD/LAN player.
+3. Improve Broadcast/Overview metrics once the engine is playing real tracks
+   continuously (elapsed/queue/current-track state instead of the current minimal
+   now-playing scaffold).
+
+Phases 5–12 per the plan file, once Phase 4 is complete:
+1. **Phase 5 — Embedded server + listener player**: NanoHTTPD routes with Range
+   support, vendored listener web assets, LAN playback.
+2. Phases 6–12 as detailed in the plan file.
 
 Also still open, carried in the plan itself: the frp registration contract
 (Phase 9) needs to be read directly from `paperweightv1` in a local session
@@ -432,13 +687,22 @@ app/src/main/java/com/paperweight/os/
 │   ├── db/AppDatabase.kt            // Room DB, fixed name paperweight-os.db
 │   ├── db/entity/                   // Vault, schedule, token, analytics, station tables
 │   ├── dao/                         // VaultDao, ScheduleDao, TokenDao, AnalyticsDao, StationDao
-│   ├── prefs/AppPreferences.kt      // + vaultTreeUri (Phase 2): persisted SAF tree grant
+│   ├── prefs/AppPreferences.kt      // + vaultTreeUri (Phase 2), non-secret backup export/import (Phase 3)
 │   └── repository/                  // local repository facades
+├── backup/                         // NEW (Phase 3)
+│   ├── BackupWriter.kt / BackupPruner.kt / RestoreManager.kt
+│   ├── BackupScheduler.kt / BackupModels.kt
+│   └── RecoveryInfoExporter.kt
 ├── vault/                          // NEW (Phase 2)
 │   ├── MetadataExtractor.kt         // MediaMetadataRetriever wrapper
 │   ├── VaultFileStore.kt            // pure SAF copy into Paperweight/vault/
 │   └── VaultIngestor.kt             // tree-grant persist/check + ingest() orchestration
-├── di/ServiceLocator.kt             // Phase 1 composition root, + vaultIngestor (Phase 2)
+├── di/ServiceLocator.kt             // Phase 1 composition root, + vaultIngestor (Phase 2), + broadcastEngine (Phase 4)
+├── broadcast/                       // NEW (Phase 4)
+│   ├── BroadcastEngine.kt / BroadcastService.kt / BroadcastState.kt
+│   ├── decode/TrackDecoder.kt
+│   ├── encode/AacEncoder.kt / AdtsHeaderWriter.kt
+│   └── hls/PlaylistWriter.kt / SegmentWriter.kt / SegmentStore.kt
 ├── network/models/                 // KEPT (see Key decisions #1), transport layer deleted
 │   ├── AudienceModels.kt / BroadcastModels.kt / DashboardAnalyticsModels.kt
 │   ├── DashboardEarningsModels.kt / LibraryModels.kt / ScheduleModels.kt
@@ -448,9 +712,10 @@ app/src/main/java/com/paperweight/os/
     ├── nav/                        // untouched
     ├── components/                 // untouched
     ├── setup/SdCardRequiredScreen.kt  // NEW (Phase 0)
-    └── dashboard/                  // Vault/Screen.kt+ViewModel.kt+UiState.kt rewired
-                                     //   for local ingestion (Phase 2); the other 8
-                                     //   screens are still the Phase 0 Error stubs
+    └── dashboard/                  // Vault rewired for local ingestion (Phase 2);
+                                     // Overview/Broadcast collect BroadcastEngine state (Phase 4);
+                                     // settings rewired for backup controls (Phase 3);
+                                     // remaining screens still use Phase 0 Error stubs
         ├── overview/ broadcast/ schedule/ vault/ station/
         └── audience/ analytics/ earnings/ settings/
 ```
@@ -594,29 +859,72 @@ adb shell uiautomator dump /sdcard/window.xml
 post-smoke logcat tail did not show a `FATAL EXCEPTION` for `com.paperweight.os`.
 Phase 1 can proceed to Phase 2.
 
-Phase 2 validation: **none performed — none possible in this session's
-environment.** This session ran with no Android SDK, no `adb`, and no
-network path to Google's Maven plugin repository:
+Phase 2 validation:
 
 ```bash
-which adb                          # (nothing — command not found)
-ls ~/Android                       # No such file or directory
-./gradlew :app:compileDebugKotlin
-# FAILURE: Plugin [id: 'com.android.application', version: '8.6.0'] was not
-# found in any of the following sources: Google, MavenRepo, Gradle Central
-# Plugin Repository
+export JAVA_HOME=/home/bud/.local/jdks/jdk-17
+export ANDROID_HOME=/home/bud/Android/Sdk
+export ANDROID_SDK_ROOT=/home/bud/Android/Sdk
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+./gradlew :app:compileDebugKotlin assembleDebug
+# BUILD SUCCESSFUL in 3m 18s
+# app/build/outputs/apk/debug/app-debug.apk = 64,590,663 bytes
+
+./gradlew :app:testDebugUnitTest
+# BUILD SUCCESSFUL; testDebugUnitTest NO-SOURCE
+
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Success
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell uiautomator dump /sdcard/window.xml
+# Vault screen visible with "Add to vault", "Your vault", and
+# "Nothing ingested yet — tap \"Add to vault\"..."
 ```
 
-So Phase 2's build has never actually succeeded — not even a Kotlin-only
-compile check, let alone `assembleDebug`, install, or the on-device SAF
-picker/ingestion smoke test the plan's own verification steps 3–4 call for.
-Everything under "Status: what's built (Phase 2)" and "Key decisions" #8–10
-above is implementation plus careful manual review of types/imports/API
-usage against the rest of this codebase, nothing more. The next session with
-real Android SDK + `adb` + the physical A12 must, in order: (1) run
-`./gradlew :app:compileDebugKotlin assembleDebug` and fix whatever doesn't
-compile — there has been zero compiler feedback on this code so far; (2)
-install and resolve the lockTask allowlist question (key decision #8) before
-"Add to vault" can even be attempted; (3) then run the plan's Phase 2
-verification steps (ingest a real file, confirm it lands under
-`Paperweight/vault/` on the card, confirm metadata/pricing round-trip).
+LockTask / picker validation:
+
+```bash
+# Tap Add to vault from the Vault screen
+adb shell dumpsys activity activities | grep -E 'ResumedActivity|mLockTaskModeState|mLockTaskAuth'
+# ResumedActivity: com.google.android.documentsui/com.android.documentsui.picker.PickActivity
+# mLockTaskAuth=LOCK_TASK_AUTH_WHITELISTED
+# mLockTaskModeState=LOCKED
+```
+
+On this A12, DocumentsUI resolves the picker package as
+`com.google.android.documentsui`, confirming the dynamic allowlist fix works.
+
+Direct ingestion validation on the real A12 used a temporary instrumented test
+(`Phase2VaultIngestionInstrumentedTest`) and a generated WAV pushed to the SD
+card. The temporary test was removed after the run so the repo is not left with
+a hardcoded card UUID test fixture.
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.vault.Phase2VaultIngestionInstrumentedTest
+# Starting 1 tests on SM-A125U - 11
+# Finished 1 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+```
+
+JUnit XML reported `tests="1" failures="0" errors="0" skipped="0"` for
+`com.paperweight.os.vault.Phase2VaultIngestionInstrumentedTest`.
+
+Physical copied file observed afterward:
+
+```bash
+adb shell 'find /storage/ED4F-17F7/A12Phase2Grant/Paperweight -maxdepth 3 -type f -print -exec ls -l {} \;'
+# /storage/ED4F-17F7/A12Phase2Grant/Paperweight/vault/a12-phase2-sample.wav
+# -rwxrwx--- ... 176444 ... a12-phase2-sample.wav
+```
+
+Important limitation/blocker from validation: Android 11 DocumentsUI refuses to
+grant the SD-card root itself, showing `Can’t use this folder` / `To protect
+your privacy, choose another folder`. The direct ingestion test therefore used a
+created subfolder grant (`A12Phase2Grant`), which makes current code write under
+`A12Phase2Grant/Paperweight/vault/`, not SD-card-root `Paperweight/vault/`.
+Resolve that SAF-root contract before Phase 3 backup/recovery relies on it.
+Remote adb automation did not complete a full manual file pick through
+`OpenMultipleDocuments`; the picker launch and backend ingestion/copy/Room path
+were verified separately as above.
