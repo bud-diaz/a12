@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import com.paperweight.os.MainActivity
 
@@ -43,7 +44,8 @@ object DeviceOwnerPolicy {
         }
     }
 
-    // SAF/content pickers used by "Add to vault" (ACTION_OPEN_DOCUMENT_TREE,
+    // Android Settings is an explicit kiosk exception for Wi-Fi/provisioning
+    // recovery. SAF/content pickers used by "Add to vault" (ACTION_OPEN_DOCUMENT_TREE,
     // ACTION_OPEN_DOCUMENT) and the legacy artwork-upload flow
     // (ACTION_GET_CONTENT) resolve to a different package than this app —
     // which one varies by OEM/OS version (AOSP's com.android.documentsui,
@@ -54,6 +56,7 @@ object DeviceOwnerPolicy {
     // every time this runs (every MainActivity.onCreate).
     private fun lockTaskPackages(context: Context): Array<String> {
         val packages = linkedSetOf(context.packageName, SETTINGS_PACKAGE)
+        packages += resolveSettingsPackages(context)
         val resolved = resolvePickerPackages(context)
         if (resolved.isEmpty()) {
             Log.w(
@@ -64,6 +67,13 @@ object DeviceOwnerPolicy {
         }
         packages += resolved
         return packages.toTypedArray()
+    }
+
+    private fun resolveSettingsPackages(context: Context): Set<String> {
+        val packageManager = context.packageManager
+        return packageManager.queryIntentActivities(Intent(Settings.ACTION_SETTINGS), 0)
+            .map { it.activityInfo.packageName }
+            .toSet()
     }
 
     private fun resolvePickerPackages(context: Context): Set<String> {

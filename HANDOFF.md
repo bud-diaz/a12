@@ -44,6 +44,107 @@ read the plan first.
 
 ## Latest validation update
 
+**Phase 5 LAN HLS playback blocker is patched and device-validated on the physical A12.**
+This session added an explicit debug-only `Generate Phase 5 validation tone` path:
+`DebugBuild` gates the UI to debuggable builds, `ValidationBroadcastSeeder`
+generates a real app-private WAV and inserts it as a public vault track, and the
+existing broadcast pipeline encodes it into AAC/HLS for the embedded server. The
+playlist writer was also corrected to omit an invalid `#EXT-X-MAP` for packed
+ADTS AAC; `ffprobe` had rejected the previous empty `init.aac` map with HTTP 416.
+
+Real validation on `SM-A125U - 11` / A12 Wi-Fi IP `10.0.0.145`:
+
+```bash
+./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# BUILD SUCCESSFUL
+# :app:testDebugUnitTest NO-SOURCE
+# app-debug.apk 71,291,613 bytes
+# sha256 745b719ce87c2dbea572dca0990bb106c4857c7603ac2e6e8d727062b416fe9e
+
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase5ValidationToneInstrumentedTest
+# Starting 1 tests on SM-A125U - 11
+# Finished 1 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 15 tests on SM-A125U - 11
+# Finished 15 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.paperweight.os/.MainActivity
+# Success; MainActivity resumed after dismissing keyguard
+# mLockTaskModeState=LOCKED; wlan0 IP=10.0.0.145; LISTEN *:8080
+
+# Broadcast screen UI showed the debug-only button, then after tapping it:
+#   Phase 5 validation tone
+#   Broadcast queue -> Phase 5 validation tone
+
+curl -i http://10.0.0.145:8080/status
+# HTTP/1.1 200 OK; application/json
+# {"isRunning":true,"nowPlayingTitle":"Phase 5 validation tone",
+#  "nowPlayingArtist":"Paperweight OS","durationMs":12000,"queueLength":1}
+
+curl -i http://10.0.0.145:8080/live/playlist.m3u8
+# HTTP/1.1 200 OK; application/vnd.apple.mpegurl
+# #EXTM3U
+# #EXT-X-VERSION:7
+# #EXT-X-TARGETDURATION:6
+# #EXT-X-MEDIA-SEQUENCE:0
+# #EXTINF:6.014,
+# segment-0.aac
+
+curl -i -H 'Range: bytes=0-15' http://10.0.0.145:8080/live/segment-0.aac
+# HTTP/1.1 206 Partial Content
+# Content-Type: audio/aac
+# Content-Range: bytes 0-15/98036
+
+ffprobe -hide_banner -v error -show_entries stream=codec_name,codec_type,sample_rate,channels \
+  -of default=noprint_wrappers=1 http://10.0.0.145:8080/live/playlist.m3u8
+# codec_name=aac
+# codec_type=audio
+# sample_rate=44100
+# channels=2
+```
+
+The service/listener checks also showed `BroadcastService isForeground=true`,
+`LISTEN *:8080`, `mLockTaskModeState=LOCKED`, and `ResumedActivity` still
+`com.paperweight.os/.MainActivity`. This validates the A12 LAN HLS endpoint as a
+real playable AAC stream from a LAN client. Bud should still do the final human
+ear-check by pressing Play at `http://10.0.0.145:8080/` or opening
+`http://10.0.0.145:8080/live/playlist.m3u8` in VLC from another Wi-Fi device,
+but the previous `404` blocker is resolved.
+
+**Android Settings kiosk exception + nav button validated on the physical A12.**
+Current session changed `DeviceOwnerPolicy` to keep Android Settings explicitly
+allowlisted and also resolve the concrete package for `Settings.ACTION_SETTINGS`
+at runtime, then added an `Android Settings` item to the dashboard drawer. Real
+validation on `SM-A125U - 11`:
+
+```bash
+./gradlew :app:compileDebugKotlin
+# BUILD SUCCESSFUL in 2s
+
+./gradlew :app:assembleDebug :app:testDebugUnitTest
+# BUILD SUCCESSFUL in 1s
+# :app:testDebugUnitTest NO-SOURCE
+
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Success
+
+# Open dashboard drawer, confirm `Android Settings` item exists, tap it.
+# dumpsys activity activities then showed:
+# ResumedActivity: com.android.settings/.homepage.SettingsHomepageActivity
+# LockTaskController mLockTaskModeState=LOCKED
+# mLockTaskPackages u0:[com.paperweight.os, com.android.settings,
+#   com.google.android.documentsui, com.samsung.android.app.soundpicker,
+#   com.sec.android.app.myfiles, com.sec.android.gallery3d]
+```
+
+The A12 was returned to `com.paperweight.os/.MainActivity` afterward with
+`mLockTaskModeState=LOCKED`.
+
 **Phase 0 (Groundwork) is build-verified on this machine.** Current session
 confirmed Google Maven reachability (`curl -sS -o /dev/null -w "%{http_code}" https://dl.google.com/`
 returned `302`), installed/used Temurin JDK 17 at `/home/bud/.local/jdks/jdk-17`,
@@ -545,13 +646,59 @@ stat -c '%s' app/build/outputs/apk/debug/app-debug.apk
   publication, and real generated-WAV audio segment generation on the physical
   A12.
 
-**Phase 5 (Embedded server + listener player) is code-complete but NOT build- or
-device-validated this session.** This pass was done from a remote Claude Code
-session/container that has JDK 21 but no `ANDROID_HOME`, no Android SDK, and no
-`adb` — `./gradlew` could not be invoked and no physical device was reachable.
-Per this file's/CLAUDE.md's "no fake success" rule, treat everything below as
-code-complete-and-self-reviewed only, not verified, until run on Bud's local
-machine (`JAVA_HOME=.../jdk-17` + `ANDROID_HOME=.../Sdk` + connected `SM-A125U`).
+**Phase 5 (Embedded server + listener player) is build-, A12-, and LAN-HLS-validated.**
+Initial local validation on Bud's machine (`JAVA_HOME=/home/bud/.local/jdks/jdk-17`,
+`ANDROID_HOME=/home/bud/Android/Sdk`) and physical `SM-A125U - 11`:
+
+```bash
+./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# BUILD SUCCESSFUL
+# :app:testDebugUnitTest NO-SOURCE
+# app-debug.apk 71,291,613 bytes
+# sha256 745b719ce87c2dbea572dca0990bb106c4857c7603ac2e6e8d727062b416fe9e
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 15 tests on SM-A125U - 11
+# Finished 15 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.paperweight.os/.MainActivity
+adb shell dumpsys activity activities | grep -E 'ResumedActivity|mLockTaskModeState|mLockTaskAuth'
+# ResumedActivity: com.paperweight.os/.MainActivity
+# mLockTaskAuth=LOCK_TASK_AUTH_WHITELISTED
+# mLockTaskModeState=LOCKED
+
+adb shell dumpsys activity services com.paperweight.os | grep -A3 -B2 BroadcastService
+# ServiceRecord ... com.paperweight.os/.broadcast.BroadcastService
+# isForeground=true ... channel=paperweight_broadcast
+
+adb shell ss -ltnp | grep ':8080'
+# LISTEN 0 0 *:8080 *:*
+
+adb forward tcp:18080 tcp:8080
+curl -i http://127.0.0.1:18080/status
+# HTTP/1.1 200 OK; application/json
+# {"isRunning":true,"nowPlayingTitle":null,...,"listenerCount":0,"queueLength":0}
+
+curl -i http://127.0.0.1:18080/
+# HTTP/1.1 200 OK; text/html; bundled listener page loads local hls.min.js/player.js
+
+# With seeded files/hls/live.m3u8 + segment-1.aac under app-private filesDir:
+curl -i http://127.0.0.1:18080/live/playlist.m3u8
+# HTTP/1.1 200 OK; application/vnd.apple.mpegurl; no-cache
+curl -i http://127.0.0.1:18080/live/segment-1.aac
+# HTTP/1.1 200 OK; audio/aac; immutable cache headers
+curl -i -H 'Range: bytes=4-7' http://127.0.0.1:18080/live/segment-1.aac
+# HTTP/1.1 206 Partial Content; Content-Range: bytes 4-7/16
+curl -i http://127.0.0.1:18080/live/../paperweight_preferences.xml
+# HTTP/1.1 404 Not Found
+```
+
+Earlier route smoke used `adb forward` while the device was not reporting a LAN
+IPv4. The final closeout pass did show `wlan0` at `10.0.0.145` and used direct
+LAN HTTP requests from this machine to the A12 for `/status`, `/live/playlist.m3u8`,
+segment range serving, and `ffprobe`.
 
 New `server/` package:
 - `EmbeddedHttpServer.kt` — extends NanoHTTPD (already a Gradle dependency
@@ -610,10 +757,74 @@ Wiring:
   is what reads this field and rewires Station's UI; Phase 5 only populates
   the data so Phase 9 has something real to display.
 
-**Known gap, not yet exercised:** actual LAN/VLC/browser playback from a
-second device on the same Wi-Fi (the plan's own Phase 5 verification step)
-could not be attempted — no physical A12, no LAN, no second device reachable
-from this session. This is the next real-device step before Phase 5 closes.
+**Phase 5 LAN HLS playback blocker resolved:** LAN reachability and generated
+AAC/HLS playback are now validated on the physical A12. The earlier failure was
+not route serving; the broadcast engine had no public vault track to encode, so
+`/live/playlist.m3u8` returned `404`. This pass added an explicit debug-only
+`Generate Phase 5 validation tone` action that creates a real WAV in app-private
+storage, inserts it into the public vault, and lets the existing broadcast engine
+encode real AAC segments into `<filesDir>/hls/`.
+
+Validation on the A12 at Wi-Fi IP `10.0.0.145`:
+
+```bash
+./gradlew :app:compileDebugKotlin :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# BUILD SUCCESSFUL; :app:testDebugUnitTest NO-SOURCE
+
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.paperweight.os.broadcast.Phase5ValidationToneInstrumentedTest
+# Starting 1 tests on SM-A125U - 11
+# Finished 1 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+./gradlew :app:connectedDebugAndroidTest
+# Starting 15 tests on SM-A125U - 11
+# Finished 15 tests on SM-A125U - 11
+# BUILD SUCCESSFUL
+
+curl -i http://10.0.0.145:8080/status
+# HTTP/1.1 200 OK; application/json
+# During active tone playback: nowPlayingTitle="Phase 5 validation tone",
+# nowPlayingArtist="Paperweight OS", durationMs=12000, queueLength=1.
+# After the 12s tone completes, nowPlayingTitle can return null while the
+# generated HLS files remain served.
+
+curl -i http://10.0.0.145:8080/live/playlist.m3u8
+# HTTP/1.1 200 OK; application/vnd.apple.mpegurl
+# #EXTM3U
+# #EXT-X-VERSION:7
+# #EXT-X-TARGETDURATION:6
+# #EXT-X-MEDIA-SEQUENCE:0
+# #EXTINF:6.014,
+# segment-0.aac
+# #EXTINF:5.967,
+# segment-1.aac
+
+curl -i -H 'Range: bytes=0-15' http://10.0.0.145:8080/live/segment-0.aac
+# HTTP/1.1 206 Partial Content
+# Content-Type: audio/aac
+# Content-Range: bytes 0-15/98036
+
+ffprobe -hide_banner -v error -show_entries stream=codec_name,codec_type,sample_rate,channels \
+  -of default=noprint_wrappers=1 http://10.0.0.145:8080/live/playlist.m3u8
+# codec_name=aac
+# codec_type=audio
+# sample_rate=44100
+# channels=2
+```
+
+A secondary compatibility bug was found during validation: `PlaylistWriter` had
+emitted `#EXT-X-MAP:URI="init.aac"` for packed ADTS AAC while `init.aac` was a
+zero-byte file. `ffprobe` followed the map and failed with `HTTP error 416
+Requested Range Not Satisfiable`. The playlist writer now omits `#EXT-X-MAP` for
+this packed-audio HLS stream, and `ffprobe` successfully recognizes the LAN URL
+as AAC stereo 44.1kHz.
+
+Device/runtime checks also showed `BroadcastService isForeground=true`,
+`LISTEN *:8080`, `mLockTaskModeState=LOCKED`, and `ResumedActivity` still
+`com.paperweight.os/.MainActivity`. The remaining manual-only check is Bud's
+human ear-check from another Wi-Fi device via the listener page or VLC, but the
+previous technical `404`/playlist/playability blocker is resolved.
 
 **Phase 9 (Reachability / frp tunnel) is code-complete but NOT build- or
 device-validated this session** (same remote-container caveat as Phase 5
@@ -717,9 +928,8 @@ whatever vault tracks/schedule/token data is already there from Phase 2/3
 testing. **Back up first** (Settings → Back up now) if that data matters,
 then restore after reinstalling, or accept the loss if the device only has
 disposable test data on it right now. The exported Room schema for version 2
-(`app/schemas/com.paperweight.os.data.db.AppDatabase/2.json`) could not be
-generated in this session — KSP only writes it during a real
-`./gradlew` build, which this session couldn't run.
+(`app/schemas/com.paperweight.os.data.db.AppDatabase/2.json`) now exists in the
+repo after the real local Gradle build run during Phase 5 closeout.
 
 **Station screen fully rewritten, not just trimmed.** The old Retrofit-era
 `StationScreen`/`StationViewModel`/`StationUiState` (Cloudflare tunnel setup,

@@ -66,7 +66,14 @@ fun BroadcastScreen(viewModel: BroadcastViewModel = viewModel()) {
                 )
             }
             item { LiveReadinessPanel(data) }
-            item { RotationPanel(data, onToggleMode = viewModel::toggleMode, onRestart = viewModel::restart) }
+            item {
+                RotationPanel(
+                    data = data,
+                    onToggleMode = viewModel::toggleMode,
+                    onRestart = viewModel::restart,
+                    onSeedValidationTone = viewModel::seedValidationTone,
+                )
+            }
             item { QueuePanel(data.queue, actionInFlight = data.actionInFlight, onRemove = viewModel::removeFromQueue) }
             if (data.actionMessage != null) {
                 item {
@@ -115,6 +122,7 @@ private fun RotationPanel(
     data: BroadcastUiState,
     onToggleMode: () -> Unit,
     onRestart: () -> Unit,
+    onSeedValidationTone: () -> Unit,
 ) {
     PanelCard(modifier = Modifier.fillMaxWidth()) {
         Text(text = "Station rotation", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -128,6 +136,22 @@ private fun RotationPanel(
                 Icon(Icons.Outlined.Refresh, contentDescription = null)
                 Text(text = "Restart", modifier = Modifier.padding(start = 8.dp))
             }
+        }
+        if (data.validationToneAvailable && data.queue.isEmpty()) {
+            OutlinedButton(
+                onClick = onSeedValidationTone,
+                enabled = !data.actionInFlight,
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            ) {
+                Icon(Icons.Outlined.Radio, contentDescription = null)
+                Text(text = "Generate Phase 5 validation tone", modifier = Modifier.padding(start = 8.dp))
+            }
+            Text(
+                text = "Debug-only: creates a real local WAV track so the A12 can generate HLS for LAN playback validation.",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 }

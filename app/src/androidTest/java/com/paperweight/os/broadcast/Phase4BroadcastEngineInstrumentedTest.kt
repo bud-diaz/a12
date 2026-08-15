@@ -75,7 +75,7 @@ class Phase4BroadcastEngineInstrumentedTest {
         assertThat(playlist).contains("#EXTM3U")
         assertThat(playlist).contains("#EXT-X-TARGETDURATION:6")
         assertThat(playlist).contains("#EXT-X-MEDIA-SEQUENCE:7")
-        assertThat(playlist).contains("#EXT-X-MAP")
+        assertThat(playlist).doesNotContain("#EXT-X-MAP")
         assertThat(playlist).contains("#EXTINF:6.000,")
         assertThat(playlist).contains("segment-7.aac")
     }

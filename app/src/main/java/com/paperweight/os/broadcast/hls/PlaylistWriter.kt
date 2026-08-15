@@ -24,9 +24,6 @@ object PlaylistWriter {
             appendLine("#EXT-X-VERSION:7")
             appendLine("#EXT-X-TARGETDURATION:$targetDurationSeconds")
             appendLine("#EXT-X-MEDIA-SEQUENCE:$mediaSequence")
-            // Packed-audio HLS doesn't use a TS container; this tag marks the
-            // stream as explicitly header-framed for clients that inspect maps.
-            appendLine("#EXT-X-MAP:URI=\"init.aac\"")
             segments.forEach { segment ->
                 appendLine("#EXTINF:${"%.3f".format(segment.durationSeconds)},")
                 appendLine(segment.fileName)

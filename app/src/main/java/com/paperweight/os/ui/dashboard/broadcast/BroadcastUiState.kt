@@ -11,6 +11,7 @@ data class BroadcastUiState(
     val queue: List<BroadcastQueueItem> = emptyList(),
     val actionMessage: String? = null,
     val actionInFlight: Boolean = false,
+    val validationToneAvailable: Boolean = false,
 ) {
     val alternateMode: String
         get() = if (mode == "shuffle") "scheduled" else "shuffle"
